@@ -9,47 +9,88 @@ if not getattr(sys, "frozen", False):
 
 from audiobook_qc.offline import DEFAULT_MODEL, resolve_model, offline_environment
 
-def self_test():
+def _stage(message: str) -> None:
+    """Write progress even in Windows --windowed executables with no stdout."""
+    import os
+    log = os.environ.get("AUDIOBOOK_QC_SMOKE_LOG")
+    if log:
+        with open(log, "a", encoding="utf-8") as stream:
+            stream.write(message + "\n")
+    if sys.stdout is not None:
+        print(message, flush=True)
+
+
+def _silent_wav(path: Path) -> None:
+    """A tiny deterministic PCM WAV for checking inference without user audio."""
+    import wave
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(16000)
+        wav.writeframes(b"\x00\x00" * 16000)
+
+
+def self_test() -> None:
+    """Fast, bounded bundle integrity check. Does NOT load both ASR models."""
     offline_environment()
+    _stage("Checking bundled FFmpeg")
     import imageio_ffmpeg
-    import faster_whisper
-    import ctranslate2
+    assert Path(imageio_ffmpeg.get_ffmpeg_exe()).is_file(), "Bundled FFmpeg missing"
+    _stage("Checking primary model files")
+    folder = resolve_model(DEFAULT_MODEL)
+    assert (folder / "model.bin").stat().st_size > 100_000_000, "Whisper weights missing"
+    _stage("Checking secondary model files")
+    from audiobook_qc.dual_engine import resolve_secondary_dir, check_model_hash
+    giga = resolve_secondary_dir()
+    check_model_hash(giga)
+    _stage("Checking application libraries")
     import docx
     import sounddevice
-    import tkinter
-    from audiobook_qc import worker
-    assert Path(imageio_ffmpeg.get_ffmpeg_exe()).is_file(), "Bundled FFmpeg missing"
-    assert callable(worker.cut_audio)
-    model_path=resolve_model(DEFAULT_MODEL)
-    assert (model_path / "model.bin").stat().st_size > 100_000_000, "Model weights are missing"
-    from audiobook_qc.dual_engine import resolve_secondary_dir, check_model_hash, load_secondary_model
-    secondary_dir=resolve_secondary_dir()
-    check_model_hash(secondary_dir)
-    # Test actual model loading, not just existence of a large file.
-    model=worker.load_model(DEFAULT_MODEL)
-    assert model is not None
-    second_model=load_secondary_model(validate_hash=False)
-    assert second_model is not None
-    # Probe the *real* GigaAM result shape: v0.5 mistakenly required a string,
-    # while upstream returns a TranscriptionResult dataclass with .text.
-    import tempfile, wave
-    from audiobook_qc.dual_engine import extract_transcription_text
-    with tempfile.TemporaryDirectory(prefix='aqc-smoke-') as folder:
-        test_wav=Path(folder)/'quiet.wav'
-        with wave.open(str(test_wav), 'wb') as f:
-            f.setnchannels(1);f.setsampwidth(2);f.setframerate(16000)
-            f.writeframes(b'\0\0'*16000*2)
-        secondary_response=second_model.transcribe(str(test_wav))
-        assert isinstance(extract_transcription_text(secondary_response),str)
-    print("AUDIOBOOK_QC_OFFLINE_BUNDLE_OK", flush=True)
+    _stage("AUDIOBOOK_QC_OFFLINE_BUNDLE_OK")
+
+
+def single_model_test(which: str) -> None:
+    """Independent processes: never keep Whisper and GigaAM in RAM together."""
+    offline_environment()
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="aqc-ci-model-") as dirname:
+        wav = Path(dirname) / "silence.wav"
+        _silent_wav(wav)
+        if which == "whisper":
+            _stage("Loading Whisper model")
+            from audiobook_qc.worker import load_model
+            model = load_model(DEFAULT_MODEL)
+            _stage("Running Whisper 1-second inference")
+            chunks, _ = model.transcribe(
+                str(wav), language="ru", vad_filter=False,
+                word_timestamps=False, condition_on_previous_text=False,
+                beam_size=1, temperature=0)
+            list(chunks)
+        elif which == "gigaam":
+            _stage("Loading GigaAM model")
+            from audiobook_qc.dual_engine import load_secondary_model, extract_transcription_text
+            model = load_secondary_model(validate_hash=False)
+            _stage("Running GigaAM 1-second inference")
+            result = model.transcribe(str(wav))
+            assert isinstance(extract_transcription_text(result), str)
+        else:
+            raise ValueError("Unknown model")
+    _stage(f"AUDIOBOOK_QC_{which.upper()}_INFERENCE_OK")
+
 
 if __name__ == "__main__":
     parser=argparse.ArgumentParser()
     parser.add_argument('--self-test', action='store_true')
     parser.add_argument('--smoke-gui', action='store_true')
+    parser.add_argument('--test-whisper', action='store_true')
+    parser.add_argument('--test-gigaam', action='store_true')
     args=parser.parse_args()
     if args.self_test:
         self_test()
+    elif args.test_whisper:
+        single_model_test("whisper")
+    elif args.test_gigaam:
+        single_model_test("gigaam")
     elif args.smoke_gui:
         from audiobook_qc.desktop import App
         import tkinter as tk
