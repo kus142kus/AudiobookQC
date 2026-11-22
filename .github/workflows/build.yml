@@ -68,6 +68,7 @@ jobs:
             --collect-all tokenizers \
             --collect-all sounddevice \
             --collect-all gigaam \
+            --collect-all transformers \
             --collect-all torchaudio \
             --collect-all omegaconf \
             --collect-all hydra \
