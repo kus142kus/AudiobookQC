@@ -1,5 +1,6 @@
-# Recommended Python 3.11. No cloud API calls after Whisper model installation.
+# Runtime Python is bundled by PyInstaller; end users do not install it.
 python-docx>=1.2.0,<2.0
 faster-whisper>=1.1.1,<2.0
 imageio-ffmpeg>=0.6,<1.0
 numpy>=1.24,<3.0
+sounddevice>=0.5.2,<1.0

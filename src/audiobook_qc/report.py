@@ -8,7 +8,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT, WD_CELL_VERTICAL_ALIGNMENT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from .analysis import fmt_time
+from .analysis import fmt_time, effective_severity
 
 CATEGORIES = {
     "repeat": "Повтор / дубль", "omission": "Пропуск фрагмента",
@@ -64,10 +64,13 @@ def _build_doc(title: str, subtitle: str, rows: list[dict], metadata: dict) -> D
     cell = summary.cell(0,0)
     cell_shading(cell, COLORS["light"])
     cell.text = f"Файл: {metadata['audio_name']}    |    Текст: {metadata['text_name']}\n" + (
-        f"Диапазон: {metadata['range']}    |    Отобрано важных: {len(rows)} из {metadata['total']}\n"
+        f"Диапазон: {metadata['range']}    |    Отобрано кандидатов: {len(rows)} из {metadata['total']}\n"
         f"Возможные повторы: {sum(r['kind']=='repeat' for r in rows)}    |    "
         f"Отмечены как ложные: {sum(r.get('review')=='false' for r in rows)}"
     )
+    if metadata.get('dual_mode') and metadata.get('not_rechecked'):
+        cell.text += (f"\nНе проверены второй моделью: {metadata['not_rechecked']}. "
+                      "Они сохранены в полном журнале, а не удалены.")
     for p in cell.paragraphs:
         p.paragraph_format.space_after = Pt(1)
         for r in p.runs:
@@ -129,7 +132,7 @@ def _build_doc(title: str, subtitle: str, rows: list[dict], metadata: dict) -> D
         p = d.add_paragraph()
         p.paragraph_format.space_before = Pt(9)
         p.add_run(f"Внимание: {metadata['uncertain']} участок(ов) не удалось надёжно сопоставить с рукописью. ").bold=True
-        p.add_run("Они не включены в перечень доказанных ошибок. Проверьте эти места в приложении.")
+        p.add_run("Они не включены в краткий список подтверждённых кандидатов. Проверьте эти места в приложении.")
     note = d.add_paragraph()
     note.paragraph_format.space_before = Pt(8)
     note.add_run("Важно: ").bold = True
@@ -147,17 +150,28 @@ def generate_report(path: Path, project: dict, issues: list[dict], start: float,
     reviews = reviews or {}
     rows = []
     for item in sorted(issues, key=lambda x: x["start"]):
-        if item["severity"] != "high":
-            continue  # Word report contains important errors; smaller candidates remain in the UI.
+        if effective_severity(item) != "high":
+            continue
+        if (project.get('report_policy') in ('second-pass', 'dual-gigaam')
+                and item.get('kind') in ('replacement', 'omission', 'extra', 'repeat')
+                and not item.get('rechecked')):
+            continue  # Unverified initial ASR hypothesis remains only in the full log.
+        if (project.get('report_policy') == 'dual-gigaam'
+                and item.get('kind') in ('replacement', 'omission', 'extra', 'repeat')
+                and not item.get('dual_confirmed')):
+            continue  # Do not call a single-ASR hypothesis a serious finding.
         row = item.copy()
         row["review"] = reviews.get(item["id"], "todo")
         rows.append(row)
     path.parent.mkdir(parents=True, exist_ok=True)
     label = "ВЕСЬ АУДИОФАЙЛ" if final else f"ЧАСТЬ · {fmt_time(start)}–{fmt_time(end)}"
-    d = _build_doc("КЛЮЧЕВЫЕ ОШИБКИ ОЗВУЧКИ", label,
+    d = _build_doc("ПОДОЗРИТЕЛЬНЫЕ МЕСТА ДЛЯ ПРОВЕРКИ", label,
                    rows, {"audio_name":project["audio_name"], "text_name":project["text_name"],
                           "range": f"{fmt_time(start)}–{fmt_time(end)}",
                           "total":len(issues),
+                          "dual_mode":project.get('report_policy') == 'dual-gigaam',
+                          "not_rechecked":sum(i.get('kind') in ('replacement','omission','extra','repeat')
+                                                and not i.get('dual_checked') for i in issues),
                           "uncertain":sum(i["kind"] == "uncertain" for i in issues)})
     # Atomic replacement so a download never sees a half-written DOCX.
     tmp = path.with_suffix(".pending.docx")

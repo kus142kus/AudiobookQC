@@ -126,6 +126,133 @@ def detect_unscripted_profanity(book_tokens: list[str], words: list[dict]) -> li
     return findings
 
 
+# Recognition spelling, punctuation and inflection changes should not be
+# automatically promoted to the Word report as a narrator's major mistake.
+# Keep them in the complete log for review rather than deleting evidence.
+NUMBER_FORMS = {
+    "ноль": "0", "один": "1", "одна": "1", "первый": "1", "первая": "1",
+    "два": "2", "две": "2", "второй": "2", "вторая": "2",
+    "три": "3", "третий": "3", "третья": "3",
+    "четыре": "4", "пять": "5", "шесть": "6", "семь": "7", "восемь": "8", "девять": "9",
+    "десять": "10", "десятый": "10", "десятая": "10", "пятьсот": "500",
+}
+
+
+def _word_parts(value: str) -> list[str]:
+    return [normalize(x) for x in tokenize(value)]
+
+
+def _compact(parts: list[str]) -> str:
+    return "".join(re.sub(r"[^\w]", "", x) for x in parts)
+
+
+def _edit_distance(a: str, b: str) -> int:
+    """Small, bounded Levenshtein for local typo-versus-word-change hints."""
+    if len(a) > len(b):
+        a, b = b, a
+    row = list(range(len(a) + 1))
+    for i, bc in enumerate(b, 1):
+        next_row = [i]
+        for j, ac in enumerate(a, 1):
+            next_row.append(min(next_row[-1] + 1, row[j] + 1, row[j-1] + (ac != bc)))
+        row = next_row
+    return row[-1]
+
+
+def low_value_difference(spoken: str, expected: str) -> bool:
+    """Conservative candidate for ASR spelling/number/word-split noise.
+
+    This is *not* a semantic equivalence oracle. Low priority findings remain
+    in the UI/CSV. Negations and other consequential short words are protected.
+    """
+    left, right = _word_parts(spoken), _word_parts(expected)
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    if len(left) == len(right) == 1:
+        a, b = left[0], right[0]
+        if NUMBER_FORMS.get(a, a) == NUMBER_FORMS.get(b, b):
+            return True
+        if a in IMPORTANT_SHORT or b in IMPORTANT_SHORT:
+            return False
+        if max(len(a), len(b)) <= 3:
+            return True
+        if min(len(a), len(b)) >= 5 and _edit_distance(a, b) <= 2:
+            return True
+        if min(len(a), len(b)) >= 7 and _edit_distance(a, b) <= 3 and SequenceMatcher(None, a, b).ratio() >= .87:
+            return True
+        return False
+    # Whisper may insert/delete hyphens or split a word into two tokens.
+    # Do not erase the candidate, but keep it out of the high-priority report.
+    if _compact(left) == _compact(right):
+        return True
+    # A whole phrase with only inflection/recognition near-misses should not
+    # dominate a report. Explicit negation changes are never treated as trivial.
+    if any(x in IMPORTANT_SHORT for x in set(left) ^ set(right)):
+        return False
+    if len(left) <= 3 and len(right) <= 3:
+        merged_left, merged_right = _compact(left), _compact(right)
+        if min(len(merged_left), len(merged_right)) >= 8:
+            return SequenceMatcher(None, merged_left, merged_right).ratio() >= .89
+    return False
+
+
+def effective_severity(issue: dict) -> str:
+    """Conservative rank for old and new transcript candidates.
+
+    The Word report only lists strong *candidates*. One-word differences are
+    inherently uncertain with Whisper, so they remain in the complete log.
+    """
+    kind = issue.get("kind", "")
+    original = issue.get("severity", "review")
+    # A word can be meaningful even when it is one token. This flag is only
+    # set after independent corroboration by GigaAM, never by the first ASR.
+    if issue.get('dual_confirmed') and original == 'high' and kind in ('replacement', 'extra', 'omission', 'repeat'):
+        return 'high' 
+    if kind == "uncertain":
+        return "review"
+    if kind in ("repeat", "clipping", "profanity"):
+        return original
+    old, new = issue.get("expected", ""), issue.get("spoken", "")
+    left, right = _word_parts(new), _word_parts(old)
+    if kind == "replacement":
+        if low_value_difference(new, old):
+            return "review"
+        # Chapter labels often contain digits in a manuscript and words in
+        # narration, and should not dominate a narratorial error report.
+        if ("глава" in left or "глава" in right or "главы" in left or "главы" in right) and (
+                any(x.isdigit() for x in left+right) or any(x in NUMBER_FORMS for x in left+right)):
+            return "review"
+        # A negation change matters only with stable neighbouring context;
+        # otherwise a split recognition artefact like 'книги не до' is likely.
+        if (set(left) ^ set(right)) & {"не", "ни", "без", "нет"}:
+            if len(set(left) & set(right)) >= 1:
+                return "high"
+            return "review"
+        if left and right and left[0] in ("не", "ни", "без", "нет") and left[0] == right[0] and left != right:
+            return "high"
+        # A single isolated word/short broken token can be a serious slip,
+        # but with a small model it is too uncertain to assert as important.
+        if min(len(left), len(right)) <= 1:
+            return "review"
+        if len(left) <= 2 and len(right) <= 2:
+            # Short idioms/invocations are frequently hallucinated or split
+            # differently by small ASR models. Leave for review in the full log.
+            return "review"
+        # For longer phrases only surface strongly divergent passages.
+        if SequenceMatcher(None, _compact(left), _compact(right)).ratio() >= .83:
+            return "review"
+        return original
+    if kind == "omission":
+        if len(right) < 3 and not any(x in {"не", "ни", "нет", "без"} for x in right):
+            return "review"
+    if kind == "extra":
+        if len(left) < 5:
+            return "review"
+    return original
+
+
 def find_explicit_repeats(words: list[dict], book_norm: list[str], prev_tail: list[str] | None = None) -> list[dict]:
     """Flag strong near-adjacent verbatim repetitions not already caught by alignment.
 
@@ -265,6 +392,10 @@ def compare(book_tokens: list[str], words: list[dict], cursor: int = 0, prev_tai
             "start":round(float(t_start),2), "end":round(float(t_end),2),
             "spoken":" ".join(new[:30]) or "—",
             "expected":" ".join(old[:30]) or "—",
+            # Context anchors enable an *independent* ASR model to check an
+            # omitted passage instead of relying only on Whisper silence.
+            "before_anchor":" ".join(book_tokens[max(0,start+i1-4):start+i1]),
+            "after_anchor":" ".join(book_tokens[start+i2:start+i2+4]),
             "reason":reason,
         })
     # Include the preceding part tail so a duplicated sentence crossing a report
@@ -276,6 +407,9 @@ def compare(book_tokens: list[str], words: list[dict], cursor: int = 0, prev_tai
         if not any(x["kind"] == "repeat" and abs(x["start"]-r["start"]) < 8 for x in issues):
             issues.append(r)
     for issue in issues:
+        issue["severity"] = effective_severity(issue)
+        if issue["severity"] != "high" and issue.get("confidence") != "low":
+            issue["confidence"] = "low"
         digest = f'{issue["kind"]}|{issue["start"]:.2f}|{issue["spoken"]}|{issue["expected"]}'
         issue["id"] = hashlib.sha256(digest.encode("utf-8")).hexdigest()[:14]
     issues.sort(key=lambda x: (x["start"], x["kind"]))

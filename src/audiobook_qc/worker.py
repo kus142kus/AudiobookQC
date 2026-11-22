@@ -69,6 +69,11 @@ def read_json(path: Path, default=None):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def quiet_subprocess_kwargs() -> dict:
+    """Prevent FFmpeg from flashing a console window on Windows."""
+    return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)} if os.name == "nt" else {}
+
+
 def get_ffmpeg() -> str:
     import imageio_ffmpeg
     return imageio_ffmpeg.get_ffmpeg_exe()
@@ -76,7 +81,8 @@ def get_ffmpeg() -> str:
 
 def audio_duration(filepath: Path) -> float:
     proc = subprocess.run([get_ffmpeg(), "-hide_banner", "-i", str(filepath)],
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace")
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace",
+                          **quiet_subprocess_kwargs())
     m = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", proc.stderr)
     if not m:
         raise ValueError("Не удалось определить продолжительность аудио. Проверьте файл и формат.")
@@ -114,7 +120,8 @@ def cut_audio(audio: Path, start: float, seconds: float, out: Path):
     cmd = [get_ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-ss", str(start),
            "-i", str(audio), "-t", str(seconds), "-vn", "-ar", "16000", "-ac", "1",
            "-c:a", "pcm_s16le", str(out)]
-    process = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
+    process = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180,
+                             **quiet_subprocess_kwargs())
     if process.returncode:
         raise RuntimeError("FFmpeg: " + process.stderr.decode("utf-8", "replace")[-700:])
 
@@ -123,12 +130,14 @@ def load_model(name: str):
     if name in MODEL_CACHE:
         return MODEL_CACHE[name]
     from faster_whisper import WhisperModel
-    # Do not retain several multi-gigabyte models in a long-lived local process.
+    from .offline import resolve_model, offline_environment
+    offline_environment()
+    model_path = resolve_model(name)  # Local files only: never contacts Hugging Face.
     MODEL_CACHE.clear()
     import gc
     gc.collect()
-    model = WhisperModel(name, device="cpu", compute_type="int8",
-                         download_root=str(ROOT / "models"))
+    model = WhisperModel(str(model_path), device="cpu", compute_type="int8",
+                         local_files_only=True)
     MODEL_CACHE[name] = model
     return model
 
@@ -161,9 +170,18 @@ def model_worker(pid: str):
     try:
         job = load_job(pid)
         job["status"] = "model_loading"
-        job["message"] = "Загрузка модели распознавания (при первом запуске нужен интернет)..."
+        job["message"] = "Загрузка встроенной локальной модели (интернет не используется)..."
         save_job(job)
-        model = load_model(job["model"]) if any(p["status"] != "done" for p in job["parts"]) else None
+        pending = any(p["status"] != "done" for p in job["parts"])
+        model = load_model(job["model"]) if pending else None
+        # A genuinely independent decoder is mandatory for a dual-model job.
+        # Never fall back silently to two passes of Whisper.
+        verifier = None
+        if pending and job.get('report_policy') == 'dual-gigaam':
+            from .dual_engine import load_secondary_model
+            job['message'] = 'Загрузка второй локальной модели GigaAM…'
+            save_job(job)
+            verifier = load_secondary_model()
         doc = tokenize(source_text(job_dir(pid) / "inputs" / job["text_stored"]))
         if len(doc) < 20:
             raise ValueError("В исходном тексте слишком мало слов для достоверного сравнения")
@@ -239,6 +257,22 @@ def model_worker(pid: str):
                         issue["start"], issue["end"] = part["start"], part["end"]
                         issue["id"] = hashlib.sha256(
                             f"empty|{part['index']}|{part['start']}".encode()).hexdigest()[:14]
+            # Verify important textual disagreements on a different audio crop.
+            # This deliberately favours fewer false alarms over a large noisy list.
+            if job.get('report_policy') == 'dual-gigaam':
+                from .dual_engine import verify_with_gigaam
+                issues = verify_with_gigaam(verifier, audio, issues, job['duration'],
+                                             cut_audio, should_stop=stop_flag.is_set)
+            else:
+                from .verification import recheck_issues
+                issues = recheck_issues(model, audio, issues, job['duration'], cut_audio,
+                                        should_stop=stop_flag.is_set)
+            if stop_flag.is_set():
+                job["status"] = "paused"
+                part["status"] = "pending"
+                job["message"] = "Остановлено перед созданием отчёта. Распознанные фрагменты сохранены."
+                save_job(job)
+                return
             issues.extend(part_acoustic)
             issues.extend(detect_unscripted_profanity(doc, part_words))
             issues.sort(key=lambda i: (i["start"], i["kind"]))
@@ -254,7 +288,11 @@ def model_worker(pid: str):
             job["cursor"] = cursor
             part["status"] = "done"
             part["issue_count"] = len(issues)
-            part["high_count"] = sum(i["severity"] == "high" for i in issues)
+            part["high_count"] = sum(
+                i["severity"] == "high" and (
+                    i.get("kind") not in ("replacement", "omission", "extra", "repeat")
+                    or job.get('report_policy') != 'dual-gigaam'
+                    or i.get('dual_confirmed')) for i in issues)
             part["alignment"] = alignment
             job["message"] = f"Отчёт для части {part['index']} готов и доступен для скачивания"
             save_job(job)
