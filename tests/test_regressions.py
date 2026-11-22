@@ -64,7 +64,7 @@ class ReliabilityTests(unittest.TestCase):
             root, pid = Path(d), "b" * 32
             base = root / "projects" / pid
             (base / "inputs").mkdir(parents=True)
-            (base / "inputs" / "text.txt").write_text("Вот длинный русский текст для аудиокниги. " * 30)
+            (base / "inputs" / "text.txt").write_text("Вот длинный русский текст для аудиокниги. " * 30, encoding="utf-8")
             (base / "inputs" / "audio.wav").write_bytes(b"fake audio; model is mocked")
             job = {"id": pid, "model": "base", "audio_name": "a.wav", "text_name": "t.txt",
                    "audio_stored": "audio.wav", "text_stored": "text.txt", "duration": 120.,
@@ -136,7 +136,7 @@ class PauseResumeTests(unittest.TestCase):
             root, pid = Path(d), "c" * 32
             base = root / "projects" / pid
             (base / "inputs").mkdir(parents=True)
-            (base / "inputs" / "text.txt").write_text("Его история началась в тишине. " * 100)
+            (base / "inputs" / "text.txt").write_text("Его история началась в тишине. " * 100, encoding="utf-8")
             (base / "inputs" / "audio.wav").write_bytes(b"synthetic placeholder")
             job = {"id": pid, "model": "base", "audio_name": "book.wav", "text_name": "book.txt",
                    "audio_stored": "audio.wav", "text_stored": "text.txt", "duration": 300.,
