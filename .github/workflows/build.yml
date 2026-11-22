@@ -44,6 +44,10 @@ jobs:
         run: |
           python -m pip install -U pip
           python -m pip install -r requirements-build.txt
+          # PyInstaller pkg_resources runtime hook needs the legacy provider.
+          # setuptools 82+ removed pkg_resources; pin on build machines only.
+          python -m pip install --force-reinstall setuptools==80.9.0
+          python -c "import pkg_resources; assert hasattr(pkg_resources, 'NullProvider'), 'incompatible setuptools/pkg_resources'"
           python -m pip cache purge || true
       - name: Run source unit and integration tests
         shell: bash
