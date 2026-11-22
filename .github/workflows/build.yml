@@ -1,0 +1,98 @@
+name: Assemble portable Windows and Mac apps
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and smoke-test ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            target: Windows-x64
+          - os: macos-15-intel
+            target: Mac-Intel
+          - os: macos-15
+            target: Mac-Apple-Silicon
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Prepare build Python (only on GitHub runner, not end-user device)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt 'pyinstaller>=6.12,<7'
+      - name: Run unit tests
+        shell: bash
+        run: python -m unittest discover -s tests -v
+      - name: Verify FFmpeg before bundle
+        shell: bash
+        run: python -c 'import imageio_ffmpeg,os; assert os.path.isfile(imageio_ffmpeg.get_ffmpeg_exe())'
+      - name: Build with the Python runtime included
+        shell: bash
+        run: |
+          python -m PyInstaller --noconfirm --clean --onedir --windowed \
+            --name AudiobookQC \
+            --paths src \
+            --add-data 'web:web' \
+            --collect-all imageio_ffmpeg \
+            --collect-all faster_whisper \
+            --collect-all ctranslate2 \
+            --collect-all av \
+            --collect-all tokenizers \
+            run.py
+      - name: Test Windows frozen executable (no separate Python needed)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          python scripts/check_bundle.py 'dist/AudiobookQC/AudiobookQC.exe'
+      - name: Test macOS frozen executable (no separate Python needed)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          python scripts/check_bundle.py 'dist/AudiobookQC.app/Contents/MacOS/AudiobookQC'
+      - name: Pack Windows portable directory
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (!(Test-Path 'dist/AudiobookQC/AudiobookQC.exe')) { throw 'Missing AudiobookQC.exe' }
+          Compress-Archive -Path 'dist/AudiobookQC' -DestinationPath 'dist/AudiobookQC-Windows-x64.zip' -Force
+      - name: Pack macOS drag-to-Applications disk image
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          test -d 'dist/AudiobookQC.app'
+          hdiutil create -volname 'Audiobook QC' \
+            -srcfolder 'dist/AudiobookQC.app' \
+            -ov -format UDZO "dist/AudiobookQC-${{ matrix.target }}.dmg"
+          test -s "dist/AudiobookQC-${{ matrix.target }}.dmg"
+      - name: Upload Windows download
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: AudiobookQC-Windows-x64
+          path: dist/AudiobookQC-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload Mac download
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: AudiobookQC-${{ matrix.target }}
+          path: dist/AudiobookQC-${{ matrix.target }}.dmg
+          if-no-files-found: error
+          retention-days: 30
