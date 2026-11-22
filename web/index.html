@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Audiobook QC — Проверка озвучки</title>
+<link rel="stylesheet" href="/style.css"></head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand"><div class="logo">◈</div><div><strong>Audiobook QC</strong><small>Проверка озвучки · локально</small></div></div>
+    <button class="nav active" id="newNav">＋ <span>Новая проверка</span></button>
+    <div class="side-title">МОИ ПРОВЕРКИ</div>
+    <div id="projectList"><div class="subtle">Загрузка...</div></div>
+    <div class="side-foot"><span class="online"></span> Данные остаются на компьютере<br><small>Нет серверной загрузки · без API-платежей</small></div>
+  </aside>
+  <main class="main">
+    <header class="top"><div class="top-left"><span class="pill">ЛОКАЛЬНЫЙ РЕЖИМ</span><span class="muted">Проверка русских аудиокниг</span></div><button class="ghost small" id="exitBtn">Выход из приложения</button></header>
+    <section id="createView" class="content">
+      <div class="eyebrow">НОВЫЙ ПРОЕКТ</div>
+      <h1>Проверьте озвучку книги</h1>
+      <p class="lead">Сравнение аудиозаписи с рукописью, поиск предполагаемых оговорок и повторов. Готовые части можно скачивать ещё до завершения проверки.</p>
+      <div class="card create-card">
+        <div class="step-title"><span class="step-icon">1</span> Выберите файлы</div>
+        <div class="upload-grid">
+          <label class="drop"><div class="drop-icon">♫</div><b>Запись книги</b><small>MP3, WAV, M4A, FLAC, OGG, AAC</small><span class="select-text" id="audioChosen">Выбрать аудиофайл</span><input type="file" id="audioInput" accept=".mp3,.wav,.m4a,.flac,.aac,.ogg,.mp4"></label>
+          <label class="drop"><div class="drop-icon doc">≡</div><b>Оригинальный текст</b><small>DOCX или TXT</small><span class="select-text" id="textChosen">Выбрать рукопись</span><input type="file" id="textInput" accept=".docx,.txt"></label>
+        </div>
+        <div class="separator"></div>
+        <div class="step-title"><span class="step-icon">2</span> Настройки проверки</div>
+        <div class="settings-grid">
+          <label>Размер одной готовой части<select id="partSize"><option value="5">5 минут</option><option value="10">10 минут</option><option value="20" selected>20 минут — рекомендуем</option><option value="30">30 минут</option><option value="60">60 минут</option></select></label>
+          <label>Модель русского распознавания<select id="model"><option value="base">base · пробная, слабее</option><option value="small" selected>small · баланс скорости и качества</option><option value="medium">medium · точнее, медленнее</option><option value="large-v3">large-v3 · больше памяти</option></select></label>
+        </div>
+        <div class="hint">ℹ В первый раз модель скачивается из интернета. После этого проверка работает локально. Чем крупнее модель, тем больше времени и памяти требуется.</div>
+        <div id="uploadProgress" class="hidden"><div class="progress-track"><div class="bar" id="uploadBar"></div></div><p id="uploadText" class="muted">Загрузка...</p></div>
+        <button class="primary" id="createBtn">Создать проект и начать проверку →</button>
+        <div id="createError" class="error hidden"></div>
+      </div>
+      <div class="feature-row"><div>✓ Обработка файлов по 6+ часов</div><div>✓ Отчёты DOCX по частям</div><div>✓ Возобновление после остановки</div></div>
+    </section>
+    <section id="projectView" class="content hidden">
+      <div class="project-tools"><div class="eyebrow">ПРОЕКТ <span id="projectId"></span></div><div class="project-actions"><a id="diagnosticDownload" href="#" download>↓ Диагностика</a><button class="delete-btn" id="deleteBtn" title="Удалить проект со всеми локальными файлами">Удалить проект</button></div></div>
+      <div class="project-heading"><div><h1 id="projectTitle"></h1><p class="lead" id="projectSubtitle"></p></div><span class="status" id="statusBadge"></span></div>
+      <div class="card progress-card">
+        <div class="progress-top"><div><strong id="progressTitle">Подготовка</strong><div id="progressMessage" class="muted" style="margin-top:6px"></div></div><strong id="progressPercent">0%</strong></div>
+        <div class="progress-track"><div class="bar" id="jobBar"></div></div>
+        <div class="progress-footer"><span id="processedLabel">00:00:00 / 00:00:00</span><div class="buttons"><button class="secondary" id="startBtn">▶ Запустить / продолжить</button><button class="ghost" id="pauseBtn">Ⅱ Приостановить</button></div></div>
+      </div>
+      <div class="metrics"><div class="metric"><b id="metricParts">0 / 0</b><small>Готовых частей</small></div><div class="metric"><b id="metricIssues">0</b><small>Всего кандидатов</small></div><div class="metric"><b id="metricHigh">0</b><small>Высокий приоритет</small></div><div class="metric"><b id="metricRepeats">0</b><small>Возможных повторов</small></div></div>
+      <div class="section-head"><div><h2>Отчёты по частям</h2><p class="muted">Любую готовую часть можно скачать сразу — не дожидаясь всего файла.</p></div><a class="secondary linkbtn" id="allZipBtn" href="#" download>↓ Скачать готовые части ZIP</a></div>
+      <div id="partsList" class="parts-grid"></div>
+      <div id="fullReport" class="full-report hidden"><div><b>✓ Полный отчёт готов</b><p>Все части проверены. Итоговый Word включает найденные замечания по всей записи.</p></div><a id="fullDownload" class="primary linkbtn" download>↓ Скачать полный DOCX</a></div>
+      <div class="section-head issues-head"><div><h2>Найденные расхождения</h2><p class="muted">Это автоматические предположения. Каждое существенное замечание следует проверить на слух.</p></div><select id="issueFilter"><option value="all">Все</option><option value="high">Только важные</option><option value="repeat">Повторы</option><option value="todo">Не проверено</option></select></div>
+      <div class="report-tools"><a class="secondary linkbtn" id="csvDownload" href="#" download>↓ Полный журнал CSV</a><span class="muted">DOCX содержит только существенные кандидаты; CSV — все замечания.</span></div>
+      <div id="issueList"><div class="empty">После обработки первой части здесь появятся результаты.</div></div>
+      <div class="more-wrap"><button class="secondary hidden" id="showMoreBtn">Показать ещё замечания</button><span class="muted" id="issueCounter"></span></div>
+    </section>
+    <footer class="footer">Audiobook QC 0.2 · Тестовая версия · Ударения и посторонние звуки пока не проверяются надёжно · Все вычисления на этом компьютере</footer>
+  </main>
+</div>
+<script src="/app.js"></script>
+</body></html>
