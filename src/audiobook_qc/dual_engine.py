@@ -7,6 +7,7 @@ assess those mismatch candidates. The two models still may share errors.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -20,6 +21,9 @@ GIGAAM_VERSION = 'v3_e2e_ctc'
 GIGAAM_DIRNAME = 'gigaam'
 GIGAAM_MODEL = 'v3_e2e_ctc.ckpt'
 GIGAAM_TOKENIZER = 'v3_e2e_ctc_tokenizer.model'
+HF_FILES = ('config.json', 'modeling_gigaam.py', 'pytorch_model.bin', 'tokenizer.model')
+HF_MANIFEST = 'model_manifest.json'
+HF_REVISION = 'cec030b4c4f35d928e4a9044a3bdb29ebd499fac'
 # Model checksum published by the upstream project's load_model implementation.
 GIGAAM_MD5 = '367074d6498f426d960b25f49531cf68'
 MAX_DUAL_RECHECKS_PER_PART = 18
@@ -69,26 +73,44 @@ def resolve_secondary_dir() -> Path:
     roots += [bundled_root() / 'models', ROOT / 'models']
     for base in roots:
         d = base / GIGAAM_DIRNAME
-        if all((d / item).is_file() and (d / item).stat().st_size > 0
-               for item in (GIGAAM_MODEL, GIGAAM_TOKENIZER)):
+        if (all((d / item).is_file() and (d / item).stat().st_size > 0
+                for item in HF_FILES + (HF_MANIFEST,))
+                or all((d / item).is_file() and (d / item).stat().st_size > 0
+                for item in (GIGAAM_MODEL, GIGAAM_TOKENIZER))):
             return d
     raise FileNotFoundError(
         'Не найдена вторая локальная модель GigaAM v3. Для двухмодельной проверки '
-        'файлы v3_e2e_ctc.ckpt и v3_e2e_ctc_tokenizer.model должны быть заранее '
-        'включены в папку models/gigaam. Никакие загрузки при анализе не выполняются.'
+        'папка models/gigaam должна содержать офлайн-файлы второй модели. '
+        'Никакие загрузки при анализе не выполняются.'
     )
 
 
 def check_model_hash(folder: Path) -> None:
     """Fail closed on corrupt weights before invoking an external decoder."""
+    if (folder / HF_MANIFEST).is_file():
+        manifest = json.loads((folder / HF_MANIFEST).read_text(encoding='utf-8'))
+        if manifest.get('revision') != HF_REVISION:
+            raise ValueError('Неизвестная ревизия офлайн-модели GigaAM')
+        for name in HF_FILES:
+            meta = manifest.get('files', {}).get(name, {})
+            f = folder/name
+            if (not f.is_file() or f.stat().st_size != meta.get('size')
+                    or not isinstance(meta.get('sha256'), str)):
+                raise ValueError(f'Некорректный файл GigaAM: {name}')
+            digest = hashlib.sha256()
+            with f.open('rb') as stream:
+                for block in iter(lambda: stream.read(1024 * 1024), b''):
+                    digest.update(block)
+            if digest.hexdigest() != meta['sha256']:
+                raise ValueError(f'Нарушена целостность модели GigaAM: {name}')
+        return
     ckpt = folder / GIGAAM_MODEL
-    md5 = hashlib.md5()  # nosec: compare publisher's legacy checksum, not for security authentication
+    md5 = hashlib.md5()  # nosec: legacy published checksum only
     with ckpt.open('rb') as fh:
         for data in iter(lambda: fh.read(1024 * 1024), b''):
             md5.update(data)
     if md5.hexdigest() != GIGAAM_MD5:
-        raise ValueError('Контрольная сумма модели GigaAM не совпадает с опубликованной. '
-                         'Нужно заменить модель в сборке.')
+        raise ValueError('Контрольная сумма модели GigaAM не совпадает с опубликованной.')
 
 
 def read_16k_pcm_wav(path: str, sample_rate: int = 16000):
@@ -135,11 +157,28 @@ def load_secondary_model(*, validate_hash: bool = True):
     if validate_hash:
         check_model_hash(folder)
     offline_environment()
-    import gigaam  # installed and bundled by build runner, not by the user
-    gigaam.hash_path = chunked_md5  # upstream reads the entire model into RAM
-    _install_wav_reader()  # bundled PCM WAV; upstream FFmpeg-on-PATH is unnecessary
-    # The upstream load_model accepts download_root; files are pre-validated,
-    # so its download helper finds existing files rather than making a request.
+    if (folder/HF_MANIFEST).is_file():
+        # Publisher-hosted version of the *same* GigaAM v3 E2E CTC architecture.
+        # Load solely from the packaged directory, with no CDN fallback.
+        from transformers import AutoModel
+        model = AutoModel.from_pretrained(
+            str(folder), trust_remote_code=True, local_files_only=True)
+        model = model.cpu().float().eval()
+        # The official HF transcriber otherwise invokes an external `ffmpeg`.
+        # Our verifier already creates mono/16-kHz PCM WAV, so read it directly.
+        import types
+        import torch
+        def prepare_pcm(self, wav_file):
+            wav = read_16k_pcm_wav(str(wav_file)).to(self._device).to(self._dtype)
+            return wav.unsqueeze(0), torch.full(
+                (1,), wav.shape[-1], dtype=torch.long, device=self._device)
+        model.model.prepare_wav = types.MethodType(prepare_pcm, model.model)
+        return model
+
+    # Legacy compatibility for earlier distributions with the official .ckpt.
+    import gigaam
+    gigaam.hash_path = chunked_md5
+    _install_wav_reader()
     return gigaam.load_model(GIGAAM_VERSION, download_root=str(folder),
                              fp16_encoder=False, device='cpu', use_flash=False)
 

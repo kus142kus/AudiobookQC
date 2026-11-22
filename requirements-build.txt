@@ -2,3 +2,6 @@
 pyinstaller>=6.12,<7
 huggingface_hub>=0.26,<2
 gigaam[torch] @ git+https://github.com/salute-developers/GigaAM.git@main
+
+# Official HF-hosted GigaAM checkpoint, loaded only from bundled local files.
+transformers>=4.45,<5

@@ -1,45 +1,67 @@
-"""CI-only download: model is bundled into the distributed application.
+"""Download both OFFLINE inference models on the GitHub build runner only.
 
-Never imported from app runtime. Fails closed on incomplete snapshot.
+The GigaAM v3 e2e CTC revision comes from its publisher's Hugging Face
+repository. It replaces the upstream CDN with its expired TLS certificate.
+All transfers use verified HTTPS. No model is downloaded by end-user app.
 """
+from __future__ import annotations
+
+import hashlib
+import json
 from pathlib import Path
 from huggingface_hub import snapshot_download
 
-root = Path('models/medium')
-root.mkdir(parents=True, exist_ok=True)
-snapshot_download(repo_id='Systran/faster-whisper-medium', local_dir=str(root),
-                  allow_patterns=['model.bin','config.json','tokenizer.json','preprocessor_config.json',
-                                  'vocabulary.*','LICENSE','README.md'])
-for name in ('model.bin','config.json','tokenizer.json'):
-    file = root/name
-    if not file.is_file() or file.stat().st_size == 0:
-        raise RuntimeError(f'Model is incomplete: {name}')
-if (root/'model.bin').stat().st_size < 100_000_000:
-    raise RuntimeError('Model weights are suspiciously small')
-print('Offline model bundled, bytes:',(root/'model.bin').stat().st_size)
+WHISPER = 'Systran/faster-whisper-medium'
+GIGAAM = 'ai-sage/GigaAM-v3'
+# Pinned publisher revision, variant e2e_ctc (not the default RNNT model).
+GIGA_REVISION = 'cec030b4c4f35d928e4a9044a3bdb29ebd499fac'
 
-# Download independent GigaAM model during CI; never at application runtime.
-import hashlib
-import urllib.request
-import os
 
-GIGA_BASE='https://cdn.chatwm.opensmodel.sberdevices.ru/GigaAM'
-GIGA_DIR=Path('models/gigaam')
-GIGA_DIR.mkdir(parents=True,exist_ok=True)
-for filename in ('v3_e2e_ctc.ckpt','v3_e2e_ctc_tokenizer.model'):
-    target=GIGA_DIR/filename
-    if not target.is_file() or target.stat().st_size==0:
-        temporary=target.with_suffix(target.suffix+'.part')
-        urllib.request.urlretrieve(f'{GIGA_BASE}/{filename}',str(temporary))
-        temporary.replace(target)
-if (GIGA_DIR/'v3_e2e_ctc.ckpt').stat().st_size<100_000_000:
-    raise RuntimeError('GigaAM checkpoint is suspiciously small')
-hash_md5=hashlib.md5()
-with (GIGA_DIR/'v3_e2e_ctc.ckpt').open('rb') as f:
-    for block in iter(lambda:f.read(1024*1024),b''):
-        hash_md5.update(block)
-if hash_md5.hexdigest() != '367074d6498f426d960b25f49531cf68':
-    raise RuntimeError('GigaAM checksum mismatch')
-if (GIGA_DIR/'v3_e2e_ctc_tokenizer.model').stat().st_size<1000:
-    raise RuntimeError('GigaAM tokenizer incomplete')
-print('Independent GigaAM v3 weights included and checked')
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open('rb') as stream:
+        for part in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(part)
+    return digest.hexdigest()
+
+
+def download_models() -> None:
+    whisper = Path('models/medium')
+    whisper.mkdir(parents=True, exist_ok=True)
+    snapshot_download(repo_id=WHISPER, local_dir=str(whisper), allow_patterns=[
+        'model.bin', 'config.json', 'tokenizer.json',
+        'preprocessor_config.json', 'vocabulary.*', 'LICENSE', 'README.md'
+    ])
+    for name in ('model.bin', 'config.json', 'tokenizer.json'):
+        path = whisper/name
+        if not path.is_file() or path.stat().st_size == 0:
+            raise RuntimeError(f'Whisper model missing: {name}')
+    if (whisper/'model.bin').stat().st_size < 100_000_000:
+        raise RuntimeError('Whisper model weights unexpectedly small')
+    print('Whisper medium downloaded and checked', flush=True)
+
+    giga = Path('models/gigaam')
+    giga.mkdir(parents=True, exist_ok=True)
+    wanted = ['config.json', 'modeling_gigaam.py',
+              'pytorch_model.bin', 'tokenizer.model']
+    snapshot_download(repo_id=GIGAAM, revision=GIGA_REVISION,
+                      local_dir=str(giga), allow_patterns=wanted,
+                      max_workers=4)
+    for name in wanted:
+        path = giga/name
+        if not path.is_file() or path.stat().st_size == 0:
+            raise RuntimeError(f'GigaAM publisher model incomplete: {name}')
+    if (giga/'pytorch_model.bin').stat().st_size < 100_000_000:
+        raise RuntimeError('GigaAM model weights unexpectedly small')
+    # Pinned revision + TLS + manifest prevents accepting truncated local data.
+    manifest = {'source': GIGAAM, 'revision': GIGA_REVISION,
+                'files': {name: {'size': (giga/name).stat().st_size,
+                                 'sha256': sha256_file(giga/name)} for name in wanted}}
+    (giga/'model_manifest.json').write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False), encoding='utf-8')
+    print('Offline GigaAM v3 e2e CTC downloaded from publisher HF:',
+          manifest['files']['pytorch_model.bin']['size'], 'bytes', flush=True)
+
+
+if __name__ == '__main__':
+    download_models()
