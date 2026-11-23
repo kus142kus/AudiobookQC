@@ -127,6 +127,8 @@ jobs:
           python -m PyInstaller --noconfirm --clean --onedir --windowed \
             --name AudiobookQC --paths src \
             --add-data 'models:models' \
+            --add-data 'web:web' \
+            --collect-all webview \
             --collect-all imageio_ffmpeg \
             --collect-all faster_whisper \
             --collect-all ctranslate2 \
