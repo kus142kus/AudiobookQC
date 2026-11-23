@@ -38,7 +38,7 @@ jobs:
       - name: Prefer CPU-only PyTorch on Windows to avoid GPU/CUDA bundles
         if: runner.os == 'Windows'
         shell: bash
-        run: python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+        run: python -m pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cpu
       - name: Install build dependencies
         shell: bash
         run: |
@@ -49,12 +49,38 @@ jobs:
           python -m pip install --force-reinstall setuptools==80.9.0
           python -c "import pkg_resources; assert hasattr(pkg_resources, 'NullProvider'), 'incompatible setuptools/pkg_resources'"
           python -m pip cache purge || true
+      - name: Audit pinned ASR dependencies and optional imports
+        shell: bash
+        run: |
+          python -m pip check
+          python - <<'PYCODE'
+          import torch, torchaudio, transformers, hydra, omegaconf, sentencepiece
+          assert torch.__version__.split('+')[0] == '2.8.0'
+          assert torchaudio.__version__.split('+')[0] == '2.8.0'
+          assert transformers.__version__ == '4.57.1'
+          print('Dependency audit passed:', torch.__version__, transformers.__version__, flush=True)
+          PYCODE
       - name: Run source unit and integration tests
         shell: bash
         run: python -m unittest discover -s tests -v
       - name: Download and checksum BOTH models on BUILD MACHINE ONLY
         shell: bash
         run: python scripts/get_offline_model.py
+      - name: Verify downloaded GigaAM shortform-only patch and checksum
+        shell: bash
+        run: |
+          python - <<'PYCODE'
+          import sys
+          sys.path.insert(0, 'src')
+          from audiobook_qc.dual_engine import check_model_hash
+          from pathlib import Path
+          folder = Path('models/gigaam')
+          check_model_hash(folder)
+          text = (folder/'modeling_gigaam.py').read_text(encoding='utf-8')
+          assert 'from pyannote.audio import' not in text
+          assert 'from pyannote.audio.pipelines import' not in text
+          print('GigaAM bundle checks and optional-import audit passed', flush=True)
+          PYCODE
       - name: Preflight independent GigaAM before packaging (diagnose model vs PyInstaller)
         shell: bash
         timeout-minutes: 10
@@ -107,7 +133,6 @@ jobs:
             --collect-all av \
             --collect-all tokenizers \
             --collect-all sounddevice \
-            --collect-all gigaam \
             --collect-all transformers \
             --collect-all torchaudio \
             --collect-all omegaconf \
