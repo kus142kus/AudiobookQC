@@ -67,12 +67,26 @@ def single_model_test(which: str) -> None:
                 beam_size=1, temperature=0)
             list(chunks)
         elif which == "gigaam":
-            _stage("Loading GigaAM model")
-            from audiobook_qc.dual_engine import load_secondary_model, extract_transcription_text
-            model = load_secondary_model(validate_hash=False)
-            _stage("Running GigaAM 1-second inference")
-            result = model.transcribe(str(wav))
-            assert isinstance(extract_transcription_text(result), str)
+            import faulthandler
+            import os
+            _stage("Starting GigaAM diagnostics")
+            # If a frozen Torch/Transformers import hangs, record live Python
+            # stacks every 60 seconds, without needing a console window.
+            stack_log_path = os.environ.get("AUDIOBOOK_QC_SMOKE_LOG")
+            stack_log = open(stack_log_path, "a", encoding="utf-8") if stack_log_path else None
+            if stack_log:
+                faulthandler.dump_traceback_later(60, repeat=True, file=stack_log)
+            try:
+                _stage("Loading GigaAM model")
+                from audiobook_qc.dual_engine import load_secondary_model, extract_transcription_text
+                model = load_secondary_model(validate_hash=False, on_stage=_stage)
+                _stage("Running GigaAM 1-second inference")
+                result = model.transcribe(str(wav))
+                assert isinstance(extract_transcription_text(result), str)
+            finally:
+                if stack_log:
+                    faulthandler.cancel_dump_traceback_later()
+                    stack_log.close()
         else:
             raise ValueError("Unknown model")
     _stage(f"AUDIOBOOK_QC_{which.upper()}_INFERENCE_OK")

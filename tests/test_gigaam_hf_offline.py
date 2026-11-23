@@ -47,8 +47,15 @@ class PublisherHfModelTests(unittest.TestCase):
             fake_transformers.AutoModel.from_pretrained.return_value=fake_model
             with patch('audiobook_qc.dual_engine.resolve_secondary_dir',return_value=folder), \
                  patch.dict(sys.modules, {'transformers':fake_transformers}):
-                loaded=load_secondary_model()
+                stages=[]
+                loaded=load_secondary_model(on_stage=stages.append)
             self.assertIs(loaded, fake_model)
+            self.assertIn('GigaAM: ready for inference', stages)
+            # Loading HF weights defaults to CPU; avoid a duplicate model-wide
+            # conversion which can exhaust constrained GitHub runners.
+            fake_model.cpu.assert_not_called()
+            fake_model.float.assert_not_called()
+            fake_model.eval.assert_called_once_with()
             args, kwargs=fake_transformers.AutoModel.from_pretrained.call_args
             self.assertEqual(args[0],str(folder))
             self.assertTrue(kwargs['local_files_only'])

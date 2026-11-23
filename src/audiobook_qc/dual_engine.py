@@ -151,19 +151,30 @@ def chunked_md5(path: str) -> str:
     return digest.hexdigest()
 
 
-def load_secondary_model(*, validate_hash: bool = True):
-    """Open already-bundled checkpoint without network. CPU for portability."""
+def load_secondary_model(*, validate_hash: bool = True, on_stage=None):
+    """Open bundled GigaAM without downloads; optional detailed progress trace.
+
+    Never re-convert the entire HF model via .cpu().float() after loading: the
+    CPU default already uses float32, and the conversion can add substantial
+    memory pressure on limited GitHub Windows runners.
+    """
+    stage = on_stage if on_stage is not None else (lambda message: None)
+    stage("GigaAM: locating bundled model directory")
     folder = resolve_secondary_dir()
     if validate_hash:
+        stage("GigaAM: verifying model checksum")
         check_model_hash(folder)
     offline_environment()
     if (folder/HF_MANIFEST).is_file():
-        # Publisher-hosted version of the *same* GigaAM v3 E2E CTC architecture.
-        # Load solely from the packaged directory, with no CDN fallback.
+        stage("GigaAM: importing Transformers")
         from transformers import AutoModel
+        stage("GigaAM: loading HF model weights (CPU)")
         model = AutoModel.from_pretrained(
             str(folder), trust_remote_code=True, local_files_only=True)
-        model = model.cpu().float().eval()
+        stage("GigaAM: model weights loaded, switching to evaluation mode")
+        # from_pretrained without device_map loads on CPU, float32 by default.
+        # Avoid duplicating model weights with a redundant full-model conversion.
+        model.eval()
         # The official HF transcriber otherwise invokes an external `ffmpeg`.
         # Our verifier already creates mono/16-kHz PCM WAV, so read it directly.
         import types
@@ -173,14 +184,19 @@ def load_secondary_model(*, validate_hash: bool = True):
             return wav.unsqueeze(0), torch.full(
                 (1,), wav.shape[-1], dtype=torch.long, device=self._device)
         model.model.prepare_wav = types.MethodType(prepare_pcm, model.model)
+        stage("GigaAM: ready for inference")
         return model
 
     # Legacy compatibility for earlier distributions with the official .ckpt.
+    stage("GigaAM: importing legacy GigaAM loader")
     import gigaam
     gigaam.hash_path = chunked_md5
     _install_wav_reader()
-    return gigaam.load_model(GIGAAM_VERSION, download_root=str(folder),
-                             fp16_encoder=False, device='cpu', use_flash=False)
+    stage("GigaAM: loading legacy checkpoint")
+    model = gigaam.load_model(GIGAAM_VERSION, download_root=str(folder),
+                              fp16_encoder=False, device='cpu', use_flash=False)
+    stage("GigaAM: ready for inference")
+    return model
 
 
 def _reading_supported(issue: dict, phrase: str, transcript: str) -> bool:
