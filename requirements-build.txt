@@ -1,7 +1,15 @@
 -r requirements.txt
 pyinstaller>=6.12,<7
 huggingface_hub>=0.26,<2
-gigaam[torch] @ git+https://github.com/salute-developers/GigaAM.git@main
 
-# Official HF-hosted GigaAM checkpoint, loaded only from bundled local files.
-transformers>=4.45,<5
+# Reproduce the versions recommended on the upstream GigaAM-v3 model card.
+# Windows uses the CPU-only torch index from the GitHub workflow.
+torch==2.8.0
+torchaudio==2.8.0
+transformers==4.57.1
+hydra-core>=1.3,<2
+omegaconf>=2.3,<3
+sentencepiece>=0.2,<1
+
+# No pyannote/torchcodec needed: only optional longform VAD imports are deferred
+# in the pinned, locally bundled GigaAM module for <23s independent checks.
