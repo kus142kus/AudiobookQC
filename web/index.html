@@ -1,60 +1,59 @@
 <!doctype html>
-<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="ru"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Audiobook QC — Проверка озвучки</title>
-<link rel="stylesheet" href="/style.css"></head>
-<body>
-<div class="app">
+<!-- AQC_STYLES -->
+</head><body>
+<div id="app" class="app">
   <aside class="sidebar">
     <div class="brand"><div class="logo">◈</div><div><strong>Audiobook QC</strong><small>Проверка озвучки · локально</small></div></div>
-    <button class="nav active" id="newNav">＋ <span>Новая проверка</span></button>
-    <div class="side-title">МОИ ПРОВЕРКИ</div>
-    <div id="projectList"><div class="subtle">Загрузка...</div></div>
-    <div class="side-foot"><span class="online"></span> Данные остаются на компьютере<br><small>Нет серверной загрузки · без API-платежей</small></div>
+    <button id="newNav" class="nav active"><span class="nav-symbol">＋</span> Новая проверка</button>
+    <div class="section-label">МОИ ПРОЕКТЫ <span id="projectCount"></span></div>
+    <div class="project-scroll" id="projectList"><div class="small-muted">Загрузка проектов…</div></div>
+    <div class="sidebar-footer"><span class="dot green"></span> Автономный режим<br><small>Аудио и рукописи остаются на устройстве</small></div>
   </aside>
-  <main class="main">
-    <header class="top"><div class="top-left"><span class="pill">ЛОКАЛЬНЫЙ РЕЖИМ</span><span class="muted">Проверка русских аудиокниг</span></div><button class="ghost small" id="exitBtn">Выход из приложения</button></header>
-    <section id="createView" class="content">
-      <div class="eyebrow">НОВЫЙ ПРОЕКТ</div>
-      <h1>Проверьте озвучку книги</h1>
-      <p class="lead">Сравнение аудиозаписи с рукописью, поиск предполагаемых оговорок и повторов. Готовые части можно скачивать ещё до завершения проверки.</p>
-      <div class="card create-card">
-        <div class="step-title"><span class="step-icon">1</span> Выберите файлы</div>
-        <div class="upload-grid">
-          <label class="drop"><div class="drop-icon">♫</div><b>Запись книги</b><small>MP3, WAV, M4A, FLAC, OGG, AAC</small><span class="select-text" id="audioChosen">Выбрать аудиофайл</span><input type="file" id="audioInput" accept=".mp3,.wav,.m4a,.flac,.aac,.ogg,.mp4"></label>
-          <label class="drop"><div class="drop-icon doc">≡</div><b>Оригинальный текст</b><small>DOCX или TXT</small><span class="select-text" id="textChosen">Выбрать рукопись</span><input type="file" id="textInput" accept=".docx,.txt"></label>
-        </div>
-        <div class="separator"></div>
-        <div class="step-title"><span class="step-icon">2</span> Настройки проверки</div>
-        <div class="settings-grid">
-          <label>Размер одной готовой части<select id="partSize"><option value="5">5 минут</option><option value="10">10 минут</option><option value="20" selected>20 минут — рекомендуем</option><option value="30">30 минут</option><option value="60">60 минут</option></select></label>
-          <label>Модель русского распознавания<select id="model"><option value="base">base · пробная, слабее</option><option value="small" selected>small · баланс скорости и качества</option><option value="medium">medium · точнее, медленнее</option><option value="large-v3">large-v3 · больше памяти</option></select></label>
-        </div>
-        <div class="hint">ℹ В первый раз модель скачивается из интернета. После этого проверка работает локально. Чем крупнее модель, тем больше времени и памяти требуется.</div>
-        <div id="uploadProgress" class="hidden"><div class="progress-track"><div class="bar" id="uploadBar"></div></div><p id="uploadText" class="muted">Загрузка...</p></div>
-        <button class="primary" id="createBtn">Создать проект и начать проверку →</button>
-        <div id="createError" class="error hidden"></div>
+  <main id="main" class="main">
+    <header class="topbar"><div><span class="top-meta">КОРРЕКТОР АУДИОКНИГ</span></div><div class="offline-badge"><span class="dot green"></span> Без интернета и облака</div></header>
+    <section id="newView" class="content">
+      <div class="eyebrow">НОВЫЙ ПРОЕКТ</div><h1>Проверка озвучки</h1>
+      <p class="lead">Загрузите аудиозапись и текст книги. Найдём предполагаемые оговорки, пропуски и повторы, затем подготовим Word-отчёты по готовым частям.</p>
+      <div class="card upload-card">
+        <h2>Исходные материалы</h2><p class="muted small">Файлы не отправляются в интернет</p>
+        <div class="file-field"><div class="file-icon">♫</div><div class="file-text"><b>Аудиозапись</b><span id="audioLabel">MP3, WAV, M4A и другие форматы</span></div><button id="pickAudio" class="btn secondary">Выбрать файл</button></div>
+        <div class="file-field"><div class="file-icon doc">▤</div><div class="file-text"><b>Рукопись</b><span id="textLabel">DOCX или TXT</span></div><button id="pickText" class="btn secondary">Выбрать файл</button></div>
+        <div class="divider"></div>
+        <div class="form-footer"><div><label class="mini-label" for="minutes">Отчёт каждые</label><select id="minutes" class="select"><option value="5">5 минут</option><option value="10">10 минут</option><option value="20" selected>20 минут</option><option value="30">30 минут</option><option value="60">60 минут</option></select></div><button id="createBtn" class="btn primary large">Начать проверку <span>→</span></button></div>
       </div>
-      <div class="feature-row"><div>✓ Обработка файлов по 6+ часов</div><div>✓ Отчёты DOCX по частям</div><div>✓ Возобновление после остановки</div></div>
+      <div class="feature-grid"><div class="feature"><span>◎</span><b>Две локальные модели</b><small>Whisper Medium + GigaAM v3</small></div><div class="feature"><span>◷</span><b>Записи на несколько часов</b><small>Обработка по фрагментам</small></div><div class="feature"><span>▤</span><b>Word по каждой части</b><small>Не дожидаясь конца книги</small></div></div>
     </section>
     <section id="projectView" class="content hidden">
-      <div class="project-tools"><div class="eyebrow">ПРОЕКТ <span id="projectId"></span></div><div class="project-actions"><a id="diagnosticDownload" href="#" download>↓ Диагностика</a><button class="delete-btn" id="deleteBtn" title="Удалить проект со всеми локальными файлами">Удалить проект</button></div></div>
-      <div class="project-heading"><div><h1 id="projectTitle"></h1><p class="lead" id="projectSubtitle"></p></div><span class="status" id="statusBadge"></span></div>
+      <div class="eyebrow" id="projectEyebrow">ПРОЕКТ</div>
+      <div class="heading-row"><div><h1 id="projectTitle">Аудиокнига</h1><p id="projectSubtitle" class="muted">—</p></div><span id="statusBadge" class="status-pill">Готово</span></div>
       <div class="card progress-card">
-        <div class="progress-top"><div><strong id="progressTitle">Подготовка</strong><div id="progressMessage" class="muted" style="margin-top:6px"></div></div><strong id="progressPercent">0%</strong></div>
-        <div class="progress-track"><div class="bar" id="jobBar"></div></div>
-        <div class="progress-footer"><span id="processedLabel">00:00:00 / 00:00:00</span><div class="buttons"><button class="secondary" id="startBtn">▶ Запустить / продолжить</button><button class="ghost" id="pauseBtn">Ⅱ Приостановить</button></div></div>
+        <div class="card-heading"><div><h2 id="progressTitle">Ход проверки</h2><p id="progressMessage" class="muted small">—</p></div><strong id="progressPercent" class="percent">0%</strong></div>
+        <div class="progress-track"><div id="progressFill" class="progress-fill"></div></div>
+        <div class="progress-info"><span id="progressRange">00:00 / 00:00</span><span id="progressParts">0 / 0 частей</span></div>
+        <div class="button-row"><button id="resumeBtn" class="btn primary">▶ Продолжить</button><button id="pauseBtn" class="btn secondary">Ⅱ Приостановить</button><button id="openReportsBtn" class="btn secondary push-right">▤ Папка с отчётами</button></div>
       </div>
-      <div class="metrics"><div class="metric"><b id="metricParts">0 / 0</b><small>Готовых частей</small></div><div class="metric"><b id="metricIssues">0</b><small>Всего кандидатов</small></div><div class="metric"><b id="metricHigh">0</b><small>Высокий приоритет</small></div><div class="metric"><b id="metricRepeats">0</b><small>Возможных повторов</small></div></div>
-      <div class="section-head"><div><h2>Отчёты по частям</h2><p class="muted">Любую готовую часть можно скачать сразу — не дожидаясь всего файла.</p></div><a class="secondary linkbtn" id="allZipBtn" href="#" download>↓ Скачать готовые части ZIP</a></div>
-      <div id="partsList" class="parts-grid"></div>
-      <div id="fullReport" class="full-report hidden"><div><b>✓ Полный отчёт готов</b><p>Все части проверены. Итоговый Word включает найденные замечания по всей записи.</p></div><a id="fullDownload" class="primary linkbtn" download>↓ Скачать полный DOCX</a></div>
-      <div class="section-head issues-head"><div><h2>Найденные расхождения</h2><p class="muted">Это автоматические предположения. Каждое существенное замечание следует проверить на слух.</p></div><select id="issueFilter"><option value="all">Все</option><option value="high">Только важные</option><option value="repeat">Повторы</option><option value="todo">Не проверено</option></select></div>
-      <div class="report-tools"><a class="secondary linkbtn" id="csvDownload" href="#" download>↓ Полный журнал CSV</a><span class="muted">DOCX содержит только существенные кандидаты; CSV — все замечания.</span></div>
-      <div id="issueList"><div class="empty">После обработки первой части здесь появятся результаты.</div></div>
-      <div class="more-wrap"><button class="secondary hidden" id="showMoreBtn">Показать ещё замечания</button><span class="muted" id="issueCounter"></span></div>
+      <div class="stat-grid"><div class="stat"><strong id="readyParts">0/0</strong><span>Готовые части</span></div><div class="stat"><strong id="issueCount">0</strong><span>Найдено кандидатов</span></div><div class="stat"><strong id="priorityCount">0</strong><span>Высокий приоритет</span></div><div class="stat"><strong id="repeatCount">0</strong><span>Возможные повторы</span></div></div>
+      <div class="section-heading"><div><h2>Отчёты по частям</h2><p>Готовые Word-файлы можно сохранить до окончания проверки.</p></div></div>
+      <div id="partsGrid" class="parts-grid"><p class="muted">Загрузка…</p></div>
+      <div class="section-heading with-action"><div><h2>Замечания</h2><p>Выберите строку, чтобы прослушать фрагмент и отметить результат.</p></div><label class="toggle"><input type="checkbox" id="showAll"><span>Показывать сомнительные</span></label></div>
+      <div class="card issue-card">
+        <div id="issues" class="issues"><div class="empty">Замечания появятся после анализа первой части.</div></div>
+        <div id="issuePager" class="pager hidden"><button id="prevPage" class="btn ghost">← Назад</button><span id="pageLabel"></span><button id="nextPage" class="btn ghost">Далее →</button></div>
+      </div>
+      <div id="issueDetail" class="card detail-card hidden">
+        <div class="card-heading"><h2>Проверка замечания</h2><span id="selectedTime" class="time-pill">00:00</span></div>
+        <div class="comparison"><div><small>В аудио (предположительно)</small><p id="spokenText">—</p></div><div><small>По книге</small><p id="expectedText">—</p></div></div>
+        <p id="issueReason" class="detail-reason"></p>
+        <div class="player"><div class="player-title"><b>Прослушать фрагмент</b><div class="player-options"><label>Скорость <select id="playerSpeed"><option value="0.75">0,75×</option><option value="1" selected>1×</option><option value="1.25">1,25×</option><option value="1.5">1,5×</option></select></label><span id="playerTime">0:00 / 0:00</span></div></div><div class="player-controls"><button id="back10" class="btn secondary square">−10 с</button><button id="playBtn" class="btn primary">▶ Слушать</button><button id="forward10" class="btn secondary square">+10 с</button><input type="range" id="timeline" min="0" max="1" value="0" step="0.1" aria-label="Перемотка" /></div></div>
+        <div class="button-row issue-actions"><button id="markFixed" class="btn success">✓ Исправлено</button><button id="markFalse" class="btn secondary">× Не ошибка</button><button id="markTodo" class="btn ghost">Сбросить отметку</button></div>
+      </div>
+      <div class="footnote">Автоматические находки требуют проверки на слух. Даже две модели могут ошибаться.</div>
     </section>
-    <footer class="footer">Audiobook QC 0.2 · Тестовая версия · Ударения и посторонние звуки пока не проверяются надёжно · Все вычисления на этом компьютере</footer>
   </main>
 </div>
-<script src="/app.js"></script>
+<div id="toast" class="toast hidden" role="alert"></div>
+<!-- AQC_SCRIPT -->
 </body></html>

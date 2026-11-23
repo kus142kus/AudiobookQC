@@ -46,6 +46,10 @@ def self_test() -> None:
     _stage("Checking application libraries")
     import docx
     import sounddevice
+    import webview
+    from audiobook_qc.desktop_web import bundled_html
+    html = bundled_html()
+    assert "id=\"projectView\"" in html, "Desktop WebView interface missing"
     _stage("AUDIOBOOK_QC_OFFLINE_BUNDLE_OK")
 
 
@@ -106,15 +110,11 @@ if __name__ == "__main__":
     elif args.test_gigaam:
         single_model_test("gigaam")
     elif args.smoke_gui:
-        from audiobook_qc.desktop import App
-        import tkinter as tk
-        app=tk.Tk()
-        App(app)
-        app.after(800,app.destroy)
-        app.mainloop()
+        from audiobook_qc.desktop_web import app_window
+        app_window(smoke=True)
     else:
         try:
-            from audiobook_qc.desktop import app_window
+            from audiobook_qc.desktop_web import app_window
             app_window()
         except Exception:
             import traceback

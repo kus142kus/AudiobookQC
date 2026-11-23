@@ -1,31 +1,85 @@
-const $ = id => document.getElementById(id);
-let currentId = null, pollTimer = null, lastProject = null, lastIssuesKey = "", visibleIssueCount = 100;
-const escapeHtml = s => String(s ?? '').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const fmt = t => {let sec=Math.max(0,Math.floor(t||0));return [Math.floor(sec/3600), Math.floor((sec%3600)/60),sec%60].map(x=>String(x).padStart(2,'0')).join(':');};
-const http = async (url, data) => {let opts = data===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)};let resp=await fetch(url,opts);let result=await resp.json();if(!resp.ok)throw Error(result.error||`Ошибка ${resp.status}`);return result;};
-function toast(msg){alert(msg);}
-function showCreate(){currentId=null;lastIssuesKey="";visibleIssueCount=100;$('createView').classList.remove('hidden');$('projectView').classList.add('hidden');$('newNav').classList.add('active');refreshSidebar();}
-function showProject(pid){currentId=pid;lastIssuesKey="";visibleIssueCount=100;$('createView').classList.add('hidden');$('projectView').classList.remove('hidden');$('newNav').classList.remove('active');loadProject();refreshSidebar();}
-function onFileChange(input,label){const file=input.files[0];$(label).textContent=file?(file.name+' · '+(file.size/1024/1024).toFixed(1)+' МБ'):'Выбрать файл';}
-$('audioInput').addEventListener('change',()=>onFileChange($('audioInput'),'audioChosen'));
-$('textInput').addEventListener('change',()=>onFileChange($('textInput'),'textChosen'));
-$('newNav').addEventListener('click',showCreate);
-$('exitBtn').addEventListener('click',async()=>{if(!confirm('Завершить приложение? Незавершённый анализ будет приостановлен.'))return;try{await http('/api/shutdown',{});document.querySelector('.main').innerHTML='<div class="content"><h1>Приложение остановлено</h1><p>Можешь закрыть эту вкладку. Готовые части и отчёты сохранены.</p></div>';}catch(e){toast(e.message);}});
-async function streamUpload(kind,file){return new Promise((resolve,reject)=>{let xhr=new XMLHttpRequest();xhr.open('POST','/api/upload?kind='+kind);xhr.setRequestHeader('X-File-Name',encodeURIComponent(file.name));xhr.upload.onprogress=e=>{if(e.lengthComputable){$('uploadBar').style.width=Math.round(100*e.loaded/e.total)+'%';$('uploadText').textContent='Копирование '+file.name+': '+Math.round(100*e.loaded/e.total)+'%';}};xhr.onload=()=>{try{let r=JSON.parse(xhr.responseText);if(xhr.status>=400)reject(Error(r.error||'Ошибка загрузки'));else resolve(r);}catch(e){reject(e);}};xhr.onerror=()=>reject(Error('Ошибка передачи файла в локальное приложение'));xhr.send(file);});}
-$('createBtn').addEventListener('click',async()=>{const audio=$('audioInput').files[0],text=$('textInput').files[0];if(!audio||!text)return toast('Выбери аудиофайл и текст книги.');$('createBtn').disabled=true;$('createError').classList.add('hidden');$('uploadProgress').classList.remove('hidden');try{$('uploadBar').style.width='0%';let a=await streamUpload('audio',audio);$('uploadBar').style.width='0%';let t=await streamUpload('text',text);$('uploadText').textContent='Определяем продолжительность записи...';let project=await http('/api/projects',{audio:a,text:t,part_minutes:Number($('partSize').value),model:$('model').value});showProject(project.id);await http('/api/projects/'+project.id+'/start',{});loadProject();}catch(e){$('createError').textContent=e.message;$('createError').classList.remove('hidden');}finally{$('createBtn').disabled=false;$('uploadProgress').classList.add('hidden');}});
-$('startBtn').addEventListener('click',async()=>{if(!currentId)return;try{await http(`/api/projects/${currentId}/start`,{});loadProject();}catch(e){toast(e.message);}});
-$('pauseBtn').addEventListener('click',async()=>{if(!currentId)return;try{await http(`/api/projects/${currentId}/pause`,{});loadProject();}catch(e){toast(e.message);}});
-$('deleteBtn').addEventListener('click',async()=>{if(!currentId)return;const pid=currentId;if(!confirm('Удалить проект и ВСЁ локальное аудио, рукопись, промежуточные данные и отчёты? Это нельзя отменить.'))return;try{await http(`/api/projects/${pid}/delete`,{});showCreate();}catch(e){toast(e.message);}});
-$('issueFilter').addEventListener('change',()=>{visibleIssueCount=100;lastProject&&renderIssues(lastProject);});
-$('showMoreBtn').addEventListener('click',()=>{visibleIssueCount+=100;lastProject&&renderIssues(lastProject);});
-async function refreshSidebar(){try{const list=await http('/api/projects');$('projectList').innerHTML=list.length?list.map(p=>`<button class="side-project ${p.id===currentId?'selected':''}" data-pid="${p.id}"><strong>${escapeHtml(p.audio_name)}</strong><small>${p.status==='completed'?'✓ Готово':fmt(p.processed_seconds)+' / '+fmt(p.duration)}</small></button>`).join(''):'<div class="subtle">Пока нет проектов</div>';$('projectList').querySelectorAll('[data-pid]').forEach(b=>b.addEventListener('click',()=>showProject(b.dataset.pid)));}catch(e){console.error(e);}}
-function renderParts(p){$('partsList').innerHTML=p.parts.map(part=>{const done=part.status==='done';const state=done?'<span class="ready">✓ Отчёт готов</span>':part.status==='working'?'<span class="working">◌ Проверяется</span>':'Ожидает проверки';return `<div class="part"><div><strong>Часть ${part.index} <span class="muted">· ${fmt(part.start)}–${fmt(part.end)}</span></strong><small>${state}${done?' · '+part.issue_count+' замечаний':''}</small></div>${done?`<a class="secondary linkbtn" href="/api/projects/${p.id}/part/${part.index}" download>↓ DOCX</a>`:'<span class="muted">—</span>'}</div>`;}).join('');const ready=p.parts.filter(x=>x.status==='done').length;$('allZipBtn').classList.toggle('hidden',ready===0);$('allZipBtn').href='/api/projects/'+p.id+'/zip';$('fullReport').classList.toggle('hidden',p.status!=='completed');$('fullDownload').href=`/api/projects/${p.id}/final`;$('csvDownload').href=`/api/projects/${p.id}/issues.csv`;$('diagnosticDownload').href=`/api/projects/${p.id}/diagnostic.json`;}
-const TYPE={repeat:'Повтор / дубль',omission:'Пропуск текста',replacement:'Оговорка / замена',extra:'Лишняя фраза',uncertain:'Нужна проверка',clipping:'Перегрузка',profanity:'Возможная бранная реплика'};
-function renderIssues(p){let f=$('issueFilter').value;let items=p.issues.filter(x=>f==='all'||(f==='high'&&x.severity==='high')||(f==='repeat'&&x.kind==='repeat')||(f==='todo'&&x.review==='todo'));$('issueCounter').textContent=`Показано ${Math.min(items.length,visibleIssueCount)} из ${items.length}`;$('showMoreBtn').classList.toggle('hidden',items.length<=visibleIssueCount);$('issueList').innerHTML=items.length?items.slice(0,visibleIssueCount).map(x=>`<article class="issue"><div class="issue-top"><div><span class="issue-time">${fmt(x.start)}</span><span class="muted"> · Часть ${x.part||'—'}</span></div><span class="type ${x.kind==='repeat'?'repeat':x.severity==='review'?'review':''}">${escapeHtml(TYPE[x.kind]||x.kind)}</span></div><div class="issue-content"><div class="phrase"><small>Распознано в записи</small>${escapeHtml(x.spoken)}</div><div class="phrase"><small>Должно быть в книге</small>${escapeHtml(x.expected)}</div></div><p class="issue-reason">${escapeHtml(x.reason)} · Уверенность: ${x.confidence==='low'?'низкая':'средняя'}</p><div class="issue-actions"><button class="review-btn" data-play="${x.start}">▶ Прослушать ±5 секунд</button><button class="review-btn ${x.review==='fixed'?'selected':''}" data-review="${x.id}" data-state="fixed">✓ Исправлено</button><button class="review-btn false ${x.review==='false'?'selected':''}" data-review="${x.id}" data-state="false">✕ Не ошибка</button><button class="review-btn" data-review="${x.id}" data-state="todo">↺ Сбросить</button></div><div class="player-slot"></div></article>`).join(''):'<div class="empty">Для этого фильтра замечаний пока нет.</div>';
-$('issueList').querySelectorAll('[data-play]').forEach(b=>b.addEventListener('click',()=>{const parent=b.closest('.issue');const slot=parent.querySelector('.player-slot');slot.innerHTML='';let player=document.createElement('audio');player.controls=true;player.autoplay=true;player.src=`/api/projects/${p.id}/audio?start=${Math.max(0,Number(b.dataset.play)-5)}&duration=12`;slot.appendChild(player);}));
-$('issueList').querySelectorAll('[data-review]').forEach(b=>b.addEventListener('click',async()=>{b.disabled=true;try{await http(`/api/projects/${p.id}/review`,{id:b.dataset.review,status:b.dataset.state});await loadProject();}catch(e){toast(e.message);}finally{b.disabled=false;}}));}
-async function loadProject(){const pid=currentId;if(!pid)return;try{let p=await http(`/api/projects/${pid}`);if(currentId!==pid)return;lastProject=p;$('projectId').textContent='#'+p.id.slice(0,8);$('projectTitle').textContent=p.audio_name;$('projectSubtitle').textContent=`Текст: ${p.text_name} · ${fmt(p.duration)} · Модель ${p.model} · Часть ${p.part_minutes} мин`;
-const running=['running','model_loading','pausing'].includes(p.status);$('statusBadge').textContent=({ready:'Готов к запуску',running:'Идёт проверка',model_loading:'Загрузка модели',paused:'Приостановлено',pausing:'Останавливается',completed:'Проверка завершена',error:'Ошибка'})[p.status]||p.status;$('statusBadge').className='status '+(p.status==='completed'?'done':running?'running':p.status==='error'?'error':'');
-let progress=p.duration?Math.floor(100*p.processed_seconds/p.duration):0;$('progressPercent').textContent=progress+'%';$('jobBar').style.width=progress+'%';$('progressTitle').textContent=running?'Выполняется анализ':p.status==='completed'?'Проверка успешно завершена':p.status==='error'?'Проверка прервана из-за ошибки':'Готово к работе';$('progressMessage').textContent=p.message;$('processedLabel').textContent=fmt(p.processed_seconds)+' / '+fmt(p.duration);
-$('startBtn').classList.toggle('hidden',running||p.status==='completed');$('pauseBtn').classList.toggle('hidden',!running);let ready=p.parts.filter(x=>x.status==='done').length;$('metricParts').textContent=ready+' / '+p.parts.length;$('metricIssues').textContent=p.issues.length;$('metricHigh').textContent=p.issues.filter(x=>x.severity==='high').length;$('metricRepeats').textContent=p.issues.filter(x=>x.kind==='repeat').length;renderParts(p);const nextKey=p.id+"/"+p.issues.map(x=>x.id+":"+x.review).join("|");if(nextKey!==lastIssuesKey){lastIssuesKey=nextKey;renderIssues(p);}}catch(e){console.error(e);$('progressMessage').textContent='Не удалось получить состояние: '+e.message;}}
-refreshSidebar();pollTimer=setInterval(()=>{if(currentId)loadProject();refreshSidebar();},5000);
+'use strict';
+const $ = (id) => document.getElementById(id);
+const state = {id:null, view:'new', audio:'', text:'', all:false, project:null, projects:[], selected:null, page:0, clip:null, busy:false};
+const labels = {replacement:'Замена', omission:'Пропуск', repeat:'Повтор', extra:'Вне текста', uncertain:'Сомнительно', clipping:'Звук', profanity:'Реплика'};
+const statuses = {ready:'Готов к проверке',running:'Идёт проверка',model_loading:'Загрузка моделей',pausing:'Приостанавливается',paused:'Пауза',completed:'Завершено',error:'Ошибка'};
+const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+const shortName = path => path ? path.replaceAll('\\','/').split('/').pop() : '';
+const formatSeconds = sec => {sec=Math.max(0,Math.floor(+sec||0));return `${Math.floor(sec/60)}:${String(sec%60).padStart(2,'0')}`};
+const isRunning = status => ['running','pausing','model_loading'].includes(status);
+const native = () => !!(window.pywebview && window.pywebview.api);
+async function invoke(name, ...args){if(!native()) throw Error('Это демонстрация интерфейса. Для работы нужен установленный Audiobook QC.');return window.pywebview.api[name](...args)}
+function notify(message){const t=$('toast');t.textContent=String(message);t.classList.remove('hidden');clearTimeout(notify.timer);notify.timer=setTimeout(()=>t.classList.add('hidden'),6500)}
+function show(id){state.view=id; $('newView').classList.toggle('hidden',id!=='new');$('projectView').classList.toggle('hidden',id!=='project');$('newNav').classList.toggle('active',id==='new'); $('main').scrollTop=0;renderSidebar()}
+function renderSidebar(){
+ $('projectCount').textContent=state.projects.length;
+ $('projectList').innerHTML = state.projects.length ? state.projects.map(p=>
+ `<div class="project-tile ${state.id===p.id&&state.view==='project'?'selected':''}"><button class="project-open" data-id="${esc(p.id)}" title="Открыть проект"><span class="project-name">${esc(p.name)}</span><small class="project-state">${esc(p.ready)}/${esc(p.total)} частей · ${esc(statuses[p.status]||p.status)}</small></button><button class="project-delete" data-delete="${esc(p.id)}" title="Удалить проект">×</button></div>`).join('') : '<div class="small-muted" style="padding:12px">Пока нет проектов</div>';
+}
+async function refreshProjects(){try{state.projects=await invoke('get_projects');renderSidebar()}catch(e){notify(e.message||e)}}
+async function openProject(id){state.id=id;state.selected=null;state.page=0;state.clip=null;show('project');await refreshProject();}
+async function refreshProject(){if(!state.id||state.busy)return;try{const p=await invoke('get_project',state.id,state.all); if(state.id!==p.id)return;state.project=p;renderProject(p)}catch(e){notify(e.message||e)}}
+function renderProject(p){
+ const main=$('main'),scroll=main.scrollTop;
+ $('projectTitle').textContent=p.name;
+ $('projectSubtitle').textContent=`Текст: ${p.text_name} · ${p.duration_label} · Две локальные модели · Отчёт каждые ${p.part_minutes} мин`;
+ $('projectEyebrow').textContent='ПРОЕКТ #'+p.id.slice(0,8).toUpperCase();
+ $('statusBadge').textContent=statuses[p.status]||p.status;
+ $('progressTitle').textContent=p.status==='completed'?'Анализ завершён':p.status==='paused'?'Проверка приостановлена':'Ход проверки';
+ $('progressMessage').textContent=p.message||'—';
+ const percent=p.duration?Math.min(100,Math.max(0,100*(p.processed||0)/p.duration)):0;
+ $('progressPercent').textContent=Math.round(percent)+'%';$('progressFill').style.width=percent+'%';
+ $('progressRange').textContent=`${p.processed_label} / ${p.duration_label}`;
+ const done=p.parts.filter(x=>x.status==='done').length;
+ $('progressParts').textContent=`${done} / ${p.parts.length} частей`;
+ $('readyParts').textContent=`${done}/${p.parts.length}`;
+ $('issueCount').textContent=p.all_count;$('priorityCount').textContent=p.high_count;$('repeatCount').textContent=p.repeat_count;
+ $('resumeBtn').disabled=isRunning(p.status)||p.status==='completed';$('pauseBtn').disabled=!isRunning(p.status);
+ $('partsGrid').innerHTML=p.parts.map(part=>`<div class="part"><div><strong>Часть ${part.index} · ${esc(part.start)}–${esc(part.end)}</strong><small class="${part.status==='done'?'state-ready':part.status==='running'?'state-progress':''}">${part.status==='done'?'✓ Готов Word-отчёт':part.status==='running'?'◷ Обрабатывается':'Ожидает проверки'}</small></div>${part.status==='done'?`<button class="btn secondary" data-report="${part.index}">↓ Word</button>`:''}</div>`).join('');
+ renderIssues(p.issues);main.scrollTop=scroll;
+}
+function renderIssues(issues){
+ if(!issues.length){$('issues').innerHTML='<div class="empty">Подтверждённых замечаний пока нет. При необходимости включите «Показывать сомнительные».</div>';$('issuePager').classList.add('hidden');}
+ else{
+ const per=35,totalPages=Math.ceil(issues.length/per);state.page=Math.min(state.page,totalPages-1);
+ $('issues').innerHTML=issues.slice(state.page*per,(state.page+1)*per).map(x=>`<button class="issue ${state.selected===x.id?'selected':''}" data-issue="${esc(x.id)}"><span class="issue-time">${esc(x.time)}</span><span class="kind ${esc(x.kind)}">${esc(labels[x.kind]||x.kind)}</span><span class="issue-text" title="${esc(x.spoken)}">${esc(x.spoken||'—')}</span><span class="issue-text" title="${esc(x.expected)}">${esc(x.expected||'—')}</span><span class="issue-arrow">›</span></button>`).join('');
+ $('issuePager').classList.toggle('hidden',totalPages<=1);$('pageLabel').textContent=`Страница ${state.page+1} из ${totalPages}`;$('prevPage').disabled=state.page===0;$('nextPage').disabled=state.page>=totalPages-1;
+ }
+ const selected=issues.find(x=>x.id===state.selected);
+ $('issueDetail').classList.toggle('hidden',!selected);
+ if(selected){$('selectedTime').textContent=selected.time;$('spokenText').textContent=selected.spoken||'—';$('expectedText').textContent=selected.expected||'—';$('issueReason').textContent=selected.reason||'Требует прослушивания';
+ $('markFixed').disabled=selected.review==='fixed';$('markFalse').disabled=selected.review==='false';}
+}
+async function choose(kind){try{const path=await invoke('pick_file',kind);if(path){state[kind]=path;$(kind==='audio'?'audioLabel':'textLabel').textContent=shortName(path)}}catch(e){notify(e.message||e)}}
+async function create(){if(!state.audio||!state.text)return notify('Выбери аудиозапись и рукопись.');if(state.busy)return;state.busy=true;const btn=$('createBtn');btn.disabled=true;btn.textContent='Создаём проект…';try{const id=await invoke('new_project',state.audio,state.text,+$('minutes').value);await refreshProjects();await openProject(id)}catch(e){notify('Не удалось начать проверку: '+(e.message||e))}finally{state.busy=false;btn.disabled=false;btn.innerHTML='Начать проверку <span>→</span>'}}
+async function updateJob(operation){if(!state.id)return;try{await invoke(operation,state.id);await refreshProject()}catch(e){notify(e.message||e)}}
+async function removeProject(pid){const project=state.projects.find(p=>p.id===pid);if(!project)return;
+ if(isRunning(project.status))return notify('Сначала приостановите проверку и дождитесь полной остановки.');
+ if(!confirm(`Удалить проект «${project.name}» вместе с его копиями аудио, текста и отчётами?\n\nИсходные файлы вне приложения сохранятся.`))return;
+ try{await invoke('delete',pid);if(state.id===pid){state.id=null;state.project=null;state.selected=null;show('new')}await refreshProjects();notify('Проект удалён')}catch(e){notify(e.message||e)}}
+async function downloadPart(index){try{await invoke('save_report',state.id,index)}catch(e){notify(e.message||e)}}
+async function openReports(){try{await invoke('open_reports',state.id)}catch(e){notify(e.message||e)}}
+async function selectIssue(id){state.selected=id;renderIssues(state.project.issues);$('playBtn').disabled=true;$('playBtn').textContent='Подготовка аудио…';$('timeline').value=0;
+ try{state.clip=await invoke('load_clip',state.id,id);applyPlayer(state.clip);$('playBtn').disabled=false;$('playBtn').textContent='▶ Слушать';}
+ catch(e){$('playBtn').disabled=false;$('playBtn').textContent='▶ Слушать';notify('Не удалось подготовить фрагмент: '+(e.message||e))}}
+async function markIssue(status){if(!state.selected)return;try{await invoke('review',state.id,state.selected,status);await refreshProject()}catch(e){notify(e.message||e)}}
+function applyPlayer(p){if(!p||!p.loaded)return;state.clip=p;$('playBtn').textContent=p.playing?'Ⅱ Пауза':'▶ Слушать';$('timeline').max=Math.max(1,p.duration);$('timeline').value=Math.min(p.position,p.duration);$('playerTime').textContent=`${formatSeconds(p.position)} / ${formatSeconds(p.duration)}`}
+async function playPause(){if(!state.clip||!state.clip.loaded)return;try{applyPlayer(await invoke('toggle_play'))}catch(e){notify(e.message||e)}}
+async function seekTo(seconds){if(!state.clip||!state.clip.loaded)return;try{applyPlayer(await invoke('seek',seconds))}catch(e){notify(e.message||e)}}
+let tickBusy=false;
+async function tick(){if(!native()||tickBusy||state.busy)return;tickBusy=true;try{await refreshProjects();if(state.id&&state.view==='project')await refreshProject();if(state.clip){applyPlayer(await invoke('player_state'))}}finally{tickBusy=false}}
+$('newNav').addEventListener('click',()=>{state.id=null;state.selected=null;show('new')});
+$('projectList').addEventListener('click',e=>{const del=e.target.closest('[data-delete]'), open=e.target.closest('[data-id]');if(del)removeProject(del.dataset.delete);else if(open)openProject(open.dataset.id)});
+$('pickAudio').onclick=()=>choose('audio');$('pickText').onclick=()=>choose('text');$('createBtn').onclick=create;
+$('resumeBtn').onclick=()=>updateJob('resume');$('pauseBtn').onclick=()=>updateJob('pause');$('openReportsBtn').onclick=openReports;
+$('partsGrid').addEventListener('click',e=>{const part=e.target.closest('[data-report]');if(part)downloadPart(+part.dataset.report)});
+$('issues').addEventListener('click',e=>{const issue=e.target.closest('[data-issue]');if(issue)selectIssue(issue.dataset.issue)});
+$('prevPage').onclick=()=>{state.page=Math.max(0,state.page-1);renderIssues(state.project.issues)};
+$('nextPage').onclick=()=>{state.page++;renderIssues(state.project.issues)};
+$('showAll').onchange=e=>{state.all=e.target.checked;state.page=0;refreshProject()};
+$('markFixed').onclick=()=>markIssue('fixed');$('markFalse').onclick=()=>markIssue('false');$('markTodo').onclick=()=>markIssue('todo');
+$('playBtn').onclick=playPause; $('playerSpeed').onchange=async e=>{try{applyPlayer(await invoke('set_speed',parseFloat(e.target.value)))}catch(err){notify(err.message||err)}};$('back10').onclick=()=>seekTo((state.clip?.position||0)-10);$('forward10').onclick=()=>seekTo((state.clip?.position||0)+10);
+$('timeline').addEventListener('change',e=>seekTo(+e.target.value));
+window.addEventListener('pywebviewready',async()=>{await tick();show(state.projects.length?'project':'new');if(state.projects.length){state.id=state.projects[0].id;await openProject(state.id)}setInterval(tick,2800)});
+// A static preview remains meaningful without a running Python application.
+if(!native()){$('projectList').innerHTML='<div class="small-muted" style="padding:12px">Проекты появятся после запуска программы</div>';}

@@ -13,3 +13,6 @@ sentencepiece>=0.2,<1
 
 # No pyannote/torchcodec needed: only optional longform VAD imports are deferred
 # in the pinned, locally bundled GigaAM module for <23s independent checks.
+
+# Modern, offline HTML/CSS desktop window; system WebView2 / WKWebView.
+pywebview>=5.4,<7
