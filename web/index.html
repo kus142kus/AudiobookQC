@@ -22,6 +22,9 @@
         <div class="file-field"><div class="file-icon">♫</div><div class="file-text"><b>Аудиозапись</b><span id="audioLabel">MP3, WAV, M4A и другие форматы</span></div><button id="pickAudio" class="btn secondary">Выбрать файл</button></div>
         <div class="file-field"><div class="file-icon doc">▤</div><div class="file-text"><b>Рукопись</b><span id="textLabel">DOCX или TXT</span></div><button id="pickText" class="btn secondary">Выбрать файл</button></div>
         <div class="divider"></div>
+        <label class="mini-label" for="glossary">Имена, термины и ударения (необязательно)</label>
+        <textarea id="glossary" rows="3" placeholder="По одному в строке: княги́ня, Потёмкин, цивилизационный. Ударение отметьте знаком ´ после гласной."></textarea>
+        <p class="muted small">Словарь хранится только в проекте. Анализ ударений экспериментальный: сомнительные случаи требуют прослушивания.</p>
         <div class="form-footer"><div><label class="mini-label" for="minutes">Отчёт каждые</label><select id="minutes" class="select"><option value="5">5 минут</option><option value="10">10 минут</option><option value="20" selected>20 минут</option><option value="30">30 минут</option><option value="60">60 минут</option></select></div><button id="createBtn" class="btn primary large">Начать проверку <span>→</span></button></div>
       </div>
       <div class="feature-grid"><div class="feature"><span>◎</span><b>Две локальные модели</b><small>Whisper Medium + GigaAM v3</small></div><div class="feature"><span>◷</span><b>Записи на несколько часов</b><small>Обработка по фрагментам</small></div><div class="feature"><span>▤</span><b>Word по каждой части</b><small>Не дожидаясь конца книги</small></div></div>

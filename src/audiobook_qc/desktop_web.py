@@ -68,7 +68,7 @@ class Bridge:
         filtered = []
         for issue in issues:
             if not uncertain:
-                if effective_severity(issue) != "high":
+                if effective_severity(issue) != "high" and issue.get("kind") not in ("sound_event","hum","hiss","click","level_jump","stress","intonation"):
                     continue
                 if (job.get("report_policy") == "dual-gigaam"
                         and issue.get("kind") in ("replacement", "omission", "extra", "repeat")
@@ -106,8 +106,8 @@ class Bridge:
         chosen = self.window.create_file_dialog(webview.OPEN_DIALOG, allow_multiple=False, file_types=filt)
         return str(chosen[0]) if chosen else ""
 
-    def new_project(self, audio: str, manuscript: str, minutes: int):
-        pid = create_project(Path(audio), Path(manuscript), part_minutes=int(minutes))
+    def new_project(self, audio: str, manuscript: str, minutes: int, glossary: str = ""):
+        pid = create_project(Path(audio), Path(manuscript), part_minutes=int(minutes), glossary_text=glossary)
         # Start in background without blocking the UI.
         worker.start(pid)
         return pid

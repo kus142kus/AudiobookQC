@@ -43,6 +43,7 @@ def main() -> None:
     for flag, timeout in (("--self-test", 180),
                           ("--test-whisper", 480),
                           ("--test-gigaam", 480),
+                          ("--test-events", 180),
                           ("--smoke-gui", 120)):
         verify(exe, flag, timeout)
     print("AUDIOBOOK_QC_NATIVE_DESKTOP_OK", flush=True)

@@ -27,11 +27,13 @@ GREEN = '#147D5B'
 
 
 def create_project(audio: Path, manuscript: Path, part_minutes: int = 20,
-                   model: str = DEFAULT_MODEL) -> str:
+                   model: str = DEFAULT_MODEL, glossary_text: str = "") -> str:
     """Direct project creation, no HTTP upload; large files copied in bounded buffers."""
     from .offline import MODEL_REPOS
     if model not in MODEL_REPOS:
         raise ValueError('Неизвестная модель')
+    if len(glossary_text) > 30000:
+        raise ValueError("Словарь слишком длинный")
     audio = audio.resolve(strict=True)
     manuscript = manuscript.resolve(strict=True)
     if audio.suffix.lower() not in ('.wav', '.mp3', '.m4a', '.flac', '.aac', '.ogg', '.mp4'):
@@ -49,6 +51,10 @@ def create_project(audio: Path, manuscript: Path, part_minutes: int = 20,
     resolve_model(model)
     from .dual_engine import resolve_secondary_dir
     resolve_secondary_dir()
+    # New projects require the locally bundled event model as well. Check
+    # before copying a multi-hour audio file, never download at runtime.
+    from .events import model_dir, _manifest_verified
+    _manifest_verified(model_dir())
     pid = uuid.uuid4().hex
     base = worker.job_dir(pid)
     inputs = base / 'inputs'
@@ -59,6 +65,7 @@ def create_project(audio: Path, manuscript: Path, part_minutes: int = 20,
         shutil.copy2(audio, inputs / (target_audio + '.pending'))
         (inputs / (target_audio + '.pending')).replace(inputs / target_audio)
         shutil.copy2(manuscript, inputs / target_text)
+        (inputs / "glossary.txt").write_text(glossary_text, encoding="utf-8")
         span = part_minutes * 60
         parts = [{'index': i + 1, 'start': i * span,
                   'end': min(duration, (i + 1) * span), 'status': 'pending', 'issue_count': 0}
@@ -66,7 +73,7 @@ def create_project(audio: Path, manuscript: Path, part_minutes: int = 20,
         job = {'id':pid, 'audio_name':audio.name, 'text_name':manuscript.name,
                'audio_stored': target_audio, 'text_stored':target_text,
                'duration': duration, 'part_minutes':part_minutes,
-               'model':model, 'report_policy':'dual-gigaam', 'status':'ready', 'processed_seconds':0,
+               'model':model, 'report_policy':'dual-gigaam', 'quality_mode':'extended-v1', 'status':'ready', 'processed_seconds':0,
                'cursor':0, 'message':'Готово к анализу', 'parts':parts}
         worker.save_job(job)
         return pid
@@ -89,6 +96,25 @@ def list_projects() -> list[dict]:
         except (OSError, ValueError, KeyError, TypeError):
             continue
     return jobs
+
+
+def delete_saved_project(pid: str) -> None:
+    """Remove only an inactive local project and its copied inputs/reports.
+
+    Never delete a directory while the recognition thread could still use it.
+    """
+    with worker.STATE_LOCK:
+        folder = worker.job_dir(pid)  # validates the UUID, prevents ../ traversal
+        if folder.is_symlink() or folder.resolve().parent != (worker.ROOT / 'projects').resolve():
+            raise RuntimeError('Недопустимый путь проекта')
+        if pid in worker.ACTIVE:
+            raise RuntimeError('Сначала приостановите проверку и дождитесь её остановки.')
+        job = worker.load_job(pid)
+        if job.get('id') != pid:
+            raise RuntimeError('Некорректные данные проекта')
+        if job.get('status') in ('running', 'model_loading', 'pausing'):
+            raise RuntimeError('Дождитесь полной остановки проверки перед удалением.')
+        shutil.rmtree(folder)
 
 
 class ClipPlayer:
@@ -172,8 +198,8 @@ class App:
         self.root = window
         window.title('Audiobook QC — Проверка озвучки')
         window.configure(bg=BG)
-        window.geometry('1140x780')
-        window.minsize(900, 650)
+        window.geometry('1240x820')
+        window.minsize(820, 560)
         self.current_id = None
         self.audio_input = tk.StringVar()
         self.text_input = tk.StringVar()
@@ -190,6 +216,13 @@ class App:
         self._setup_styles()
         self._build()
         self.update_history()
+        if self.history_ids:
+            self.current_id = self.history_ids[0]
+            self._select_history_row(0)
+            self._show_project_view()
+            self.render_job()
+        else:
+            self._choose_new()
         window.protocol('WM_DELETE_WINDOW', self.close)
         self.poll()
 
@@ -197,7 +230,7 @@ class App:
         sty = ttk.Style(self.root)
         if 'clam' in sty.theme_names():
             sty.theme_use('clam')
-        sty.configure('Main.Treeview', rowheight=33, font=('Segoe UI', 10), background=WHITE,
+        sty.configure('Main.Treeview', rowheight=30, font=('Segoe UI', 10), background=WHITE,
                       foreground=NAVY, fieldbackground=WHITE)
         sty.configure('Main.Treeview.Heading', font=('Segoe UI', 10, 'bold'), background='#E8EFF7', foreground=NAVY)
         sty.map('Main.Treeview', background=[('selected','#D9E9FA')], foreground=[('selected',NAVY)])
@@ -216,53 +249,140 @@ class App:
                   activeforeground=WHITE if primary else NAVY)
         return w
 
-    def _card(self, parent, padx=22, pady=15):
+    def _card(self, parent, padx=20, pady=14):
         f=tk.Frame(parent,bg=WHITE,highlightbackground=BORDER,highlightthickness=1)
-        f.pack(fill='x',padx=23,pady=9)
+        f.pack(fill='x',padx=18,pady=8)
         inner=tk.Frame(f,bg=WHITE)
         inner.pack(fill='both',expand=True,padx=padx,pady=pady)
         return inner
 
     def _build(self):
-        outer=tk.Frame(self.root,bg=BG)
-        outer.pack(fill='both',expand=True)
-        side=tk.Frame(outer,width=220,bg=NAVY)
-        side.pack(side='left',fill='y')
+        outer = tk.Frame(self.root, bg=BG)
+        outer.pack(fill='both', expand=True)
+
+        # Persistent project navigation, including deletion without creating a new job.
+        side = tk.Frame(outer, width=224, bg=NAVY)
+        side.pack(side='left', fill='y')
         side.pack_propagate(False)
-        self.label(side,'◉  AUDIOBOOK QC',15,True,WHITE,NAVY).pack(anchor='w',padx=19,pady=(24,7))
-        self.label(side,'Локальная проверка книг',9,False,'#A6C3DB',NAVY).pack(anchor='w',padx=19)
-        tk.Frame(side,height=1,bg='#33516B').pack(fill='x',padx=17,pady=20)
-        self.button(side,'+ Новая проверка',self._choose_new,True).pack(fill='x',padx=15,pady=4)
-        self.label(side,'ИСТОРИЯ ПРОЕКТОВ',9,True,'#BDD0E0',NAVY).pack(anchor='w',padx=18,pady=(24,7))
-        self.history=tk.Listbox(side,relief='flat',activestyle='none',borderwidth=0,
-                                highlightthickness=0,bg=NAVY,fg=WHITE,
-                                selectbackground='#315778',selectforeground=WHITE,
-                                font=('Segoe UI',10),height=20)
-        self.history.pack(fill='both',expand=True,padx=11,pady=2)
+        self.label(side, 'AUDIOBOOK QC', 15, True, WHITE, NAVY).pack(anchor='w', padx=18, pady=(23,5))
+        self.label(side, 'Корректор аудиокниг', 9, False, '#B2C8DC', NAVY).pack(anchor='w', padx=18)
+        tk.Frame(side, height=1, bg='#35516D').pack(fill='x', padx=16, pady=17)
+        self.button(side, '+ Новая проверка', self._choose_new, True).pack(fill='x', padx=12, pady=(0,13))
+        self.label(side, 'ПРОЕКТЫ', 9, True, '#BED0E1', NAVY).pack(anchor='w', padx=16, pady=(4,7))
+        history_box = tk.Frame(side, bg=NAVY)
+        history_box.pack(fill='both', expand=True, padx=(9,7))
+        self.history = tk.Listbox(history_box, relief='flat', activestyle='none', borderwidth=0,
+                                  highlightthickness=0, bg=NAVY, fg=WHITE,
+                                  selectbackground='#305878', selectforeground=WHITE,
+                                  exportselection=False, font=('Segoe UI',10), height=10)
+        history_scroll = ttk.Scrollbar(history_box, orient='vertical', command=self.history.yview)
+        self.history.configure(yscrollcommand=history_scroll.set)
+        history_scroll.pack(side='right', fill='y')
+        self.history.pack(side='left', fill='both', expand=True)
         self.history.bind('<<ListboxSelect>>', self._history_click)
-        self.history_ids=[]
-        self.label(side,'Без браузера и облачных API',9,False,'#A6C3DB',NAVY).pack(anchor='w',padx=18,pady=(8,20))
-        main=tk.Frame(outer,bg=BG)
-        main.pack(side='left',fill='both',expand=True)
-        self.main=main
-        header=tk.Frame(main,bg=BG)
-        header.pack(fill='x',padx=24,pady=(22,4))
-        self.heading=self.label(header,'Проверка озвучки',21,True,NAVY,BG)
+        self.history_ids = []
+        self.delete_btn = tk.Button(side, text='Удалить выбранный проект',
+                                    command=self.delete_project, relief='flat', cursor='hand2',
+                                    font=('Segoe UI', 9), bg=NAVY, fg='#F6C6C7',
+                                    activebackground='#294563', activeforeground=WHITE,
+                                    anchor='w', padx=12, pady=9)
+        self.delete_btn.pack(fill='x', padx=10, pady=(8,4))
+        self.label(side, 'Обработка на этом компьютере',9,False,'#A6C3DB',NAVY).pack(
+            anchor='w',padx=17,pady=(4,15))
+
+        main = tk.Frame(outer, bg=BG)
+        main.pack(side='left', fill='both', expand=True)
+        # Canvas is essential: previously the lower controls were cut off on laptop screens.
+        self.page_canvas = tk.Canvas(main, bg=BG, highlightthickness=0, borderwidth=0)
+        page_scroll = ttk.Scrollbar(main, orient='vertical', command=self.page_canvas.yview)
+        self.page_canvas.configure(yscrollcommand=page_scroll.set)
+        page_scroll.pack(side='right', fill='y')
+        self.page_canvas.pack(side='left', fill='both', expand=True)
+        page = tk.Frame(self.page_canvas, bg=BG)
+        self.page = page
+        self.page_window = self.page_canvas.create_window((0,0), window=page, anchor='nw')
+        page.bind('<Configure>', self._resize_scrollregion)
+        self.page_canvas.bind('<Configure>', self._resize_page_width)
+        self.root.bind_all('<MouseWheel>', self._mousewheel, add='+')
+        self.root.bind_all('<Button-4>', self._mousewheel, add='+')
+        self.root.bind_all('<Button-5>', self._mousewheel, add='+')
+
+        header = tk.Frame(page, bg=BG)
+        header.pack(fill='x', padx=20, pady=(19, 5))
+        self.heading = self.label(header,'Проверка озвучки',19,True,NAVY,BG)
         self.heading.pack(side='left')
-        self.offline=self.label(header,'●  Автономный режим',10,True,GREEN,BG)
+        self.offline = self.label(header, '●  Офлайн', 10, True, GREEN, BG)
         self.offline.pack(side='right')
         try:
             resolve_model(DEFAULT_MODEL)
         except FileNotFoundError:
-            self.offline.configure(text='●  Локальная модель отсутствует',fg='#AB6A00')
-        self.new_panel = self._card(main,pady=12)
+            self.offline.configure(text='●  Модель не найдена', fg='#A56C14')
+        self.new_panel = self._card(page, pady=13)
+        self.new_panel_host = self.new_panel.master
         self._build_new()
-        self.progress_panel=self._card(main,pady=14)
+        self.progress_panel = self._card(page, pady=13)
+        self.progress_panel_host = self.progress_panel.master
         self._build_status()
-        issues_shell=tk.Frame(main,bg=WHITE,highlightbackground=BORDER,highlightthickness=1)
-        issues_shell.pack(fill='both',expand=True,padx=23,pady=(9,18))
+        issues_shell = tk.Frame(page,bg=WHITE,highlightbackground=BORDER,highlightthickness=1)
+        issues_shell.pack(fill='x',padx=18,pady=(8,18))
+        self.issues_shell = issues_shell
         self._build_issues(issues_shell)
-        self._choose_new()
+
+    def _resize_scrollregion(self, _event=None):
+        self.page_canvas.configure(scrollregion=self.page_canvas.bbox('all'))
+
+    def _resize_page_width(self, event):
+        self.page_canvas.itemconfigure(self.page_window, width=event.width)
+        self._resize_scrollregion()
+
+    def _mousewheel(self, event):
+        # Do not steal scrolling from the issue list, project list or combobox.
+        try:
+            target = self.root.winfo_containing(event.x_root, event.y_root)
+        except (tk.TclError, AttributeError):
+            return
+        if target is None:
+            return
+        w = target
+        while w is not None:
+            if w in (self.history, self.tree):
+                return
+            if w == self.page_canvas:
+                break
+            w = getattr(w, 'master', None)
+        if w is None:
+            return
+        if event.num == 4:
+            direction = -3
+        elif event.num == 5:
+            direction = 3
+        else:
+            delta = event.delta or 0
+            direction = -3 if delta > 0 else 3 if delta < 0 else 0
+        if direction:
+            self.page_canvas.yview_scroll(direction, 'units')
+            return 'break'
+
+    def _show_project_view(self):
+        self.new_panel_host.pack_forget()
+        if not self.progress_panel_host.winfo_manager():
+            if self.issues_shell.winfo_manager():
+                self.progress_panel_host.pack(fill='x', padx=18, pady=8, before=self.issues_shell)
+            else:
+                self.progress_panel_host.pack(fill='x', padx=18, pady=8)
+        if not self.issues_shell.winfo_manager():
+            self.issues_shell.pack(fill='x', padx=18, pady=(8,18))
+        self.heading.configure(text='Проверка озвучки')
+        self._resize_scrollregion()
+
+    def _show_new_view(self):
+        self.progress_panel_host.pack_forget()
+        self.issues_shell.pack_forget()
+        if not self.new_panel_host.winfo_manager():
+            self.new_panel_host.pack(fill='x', padx=18, pady=8)
+        self.heading.configure(text='Новая проверка')
+        self.page_canvas.yview_moveto(0)
+        self._resize_scrollregion()
 
     def _file_row(self,parent,tag,var,cmd):
         row=tk.Frame(parent,bg=WHITE)
@@ -276,7 +396,7 @@ class App:
 
     def _build_new(self):
         p=self.new_panel
-        self.label(p,'Новая проверка',13,True).pack(anchor='w',pady=(0,8))
+        self.label(p,'Выбери запись и текст книги',13,True).pack(anchor='w',pady=(0,8))
         self._file_row(p,'Аудио',self.audio_input, self.pick_audio)
         self._file_row(p,'Рукопись',self.text_input, self.pick_text)
         footer=tk.Frame(p,bg=WHITE)
@@ -285,7 +405,7 @@ class App:
         m=ttk.Combobox(footer,textvariable=self.parts_minutes,values=['5','10','20','30','60'],state='readonly',width=4)
         m.pack(side='left',padx=7)
         self.label(footer,'минут',10,False).pack(side='left')
-        self.label(footer,'Две модели: Whisper medium + GigaAM v3 • офлайн',9,False,fg=MUTED).pack(side='left',padx=20)
+        # The models run offline and do not need another crowded line of text here.
         self.create_btn=self.button(footer,'Начать проверку',self.create_and_run,True)
         self.create_btn.pack(side='right')
 
@@ -305,20 +425,23 @@ class App:
         controls.pack(fill='x')
         self.resume_btn=self.button(controls,'Продолжить',self.resume_job,True)
         self.resume_btn.pack(side='left',padx=(0,7))
-        self.button(controls,'Пауза',self.pause_job).pack(side='left',padx=5)
+        self.pause_btn=self.button(controls,'Пауза',self.pause_job)
+        self.pause_btn.pack(side='left',padx=5)
         self.button(controls,'Сохранить Word',self.save_report).pack(side='left',padx=5)
         self.button(controls,'Папка с отчётами',self.open_reports_folder).pack(side='right')
 
     def _build_issues(self, parent):
         heading=tk.Frame(parent,bg=WHITE)
         heading.pack(fill='x',padx=18,pady=(14,6))
-        self.label(heading,'Замечания',13,True).pack(side='left')
+        self.label(heading,'Замечания по озвучке',13,True).pack(side='left')
         cb=tk.Checkbutton(heading,text='Показать сомнительные',variable=self.show_uncertain,
                           command=self.render_issues,relief='flat',bg=WHITE,fg=MUTED,
                           font=('Segoe UI',10),activebackground=WHITE)
         cb.pack(side='right')
         tree_box=tk.Frame(parent,bg=WHITE)
-        tree_box.pack(fill='both',expand=True,padx=17,pady=6)
+        tree_box.pack(fill='x',padx=17,pady=6)
+        tree_box.configure(height=310)
+        tree_box.pack_propagate(False)
         self.tree=ttk.Treeview(tree_box,columns=('time','type','spoken','expected'),show='headings',style='Main.Treeview')
         for k,title,width in [('time','Время',105),('type','Тип',132),('spoken','Распознано',230),('expected','По книге',230)]:
             self.tree.heading(k,text=title)
@@ -328,9 +451,13 @@ class App:
         scroll.pack(side='right',fill='y')
         self.tree.pack(side='left',fill='both',expand=True)
         self.tree.bind('<<TreeviewSelect>>',self.selected_issue)
+        self.empty_issues = self.label(tree_box,
+            'Пока нет подтверждённых замечаний.\nМожно включить «Показать сомнительные».',
+            11, False, fg=MUTED, bg=WHITE, justify='center')
+        self.empty_issues.place(relx=.5, rely=.5, anchor='center')
         actions=tk.Frame(parent,bg=WHITE)
         actions.pack(fill='x',padx=17,pady=(1,6))
-        self.reason=self.label(actions,'Нажми на строку, чтобы прослушать.',9,False,fg=MUTED,
+        self.reason=self.label(actions,'Выбери ошибку в списке, чтобы прослушать запись.',9,False,fg=MUTED,
                                wraplength=600,justify='left')
         self.reason.pack(side='left',fill='x',expand=True)
         self.button(actions,'Не ошибка',lambda:self.review('false'),padx=9,pady=5).pack(side='right',padx=4)
@@ -349,13 +476,6 @@ class App:
         self.time_label.pack(side='right',padx=(0,10))
         self._sliding=False
         self.timeline.bind('<ButtonPress-1>',lambda _:setattr(self,'_sliding',True))
-        # Reserve bottom rows so playback never disappears below the window.
-        tree_box.pack_forget()
-        actions.pack_forget()
-        player.pack_forget()
-        player.pack(side='bottom',fill='x',padx=16,pady=(4,12))
-        actions.pack(side='bottom',fill='x',padx=17,pady=(1,6))
-        tree_box.pack(side='top',fill='both',expand=True,padx=17,pady=6)
 
     def pick_audio(self):
         p=filedialog.askopenfilename(title='Выбери аудиокнигу',filetypes=[('Аудио','*.mp3 *.wav *.m4a *.flac *.aac *.ogg *.mp4'),('Все файлы','*.*')])
@@ -366,18 +486,27 @@ class App:
         if p:self.text_input.set(p)
 
     def _choose_new(self):
+        self.current_id = None
+        self.history.selection_clear(0, 'end')
         self.audio_input.set('')
         self.text_input.set('')
         self.create_btn.configure(state='normal')
+        self._clip_seq += 1
+        self.player.stop()
+        self._show_new_view()
 
     def create_and_run(self):
         if not self.audio_input.get() or not self.text_input.get():
             messagebox.showwarning('Нет файлов','Выбери аудио и текст рукописи.')
             return
+        if worker.ACTIVE:
+            messagebox.showwarning('Идёт проверка',
+                                   'Сначала приостановите текущую проверку и дождитесь остановки.')
+            return
         self.create_btn.configure(state='disabled')
         audio, text = Path(self.audio_input.get()), Path(self.text_input.get())
         duration = int(self.parts_minutes.get())
-        self.job_summary.configure(text='Подготовка файлов проекта…')
+        self.create_btn.configure(text='Подготовка…')
         def task():
             try:
                 pid=create_project(audio,text,duration)
@@ -387,16 +516,16 @@ class App:
         threading.Thread(target=task,daemon=True).start()
 
     def _created(self,pid):
-        self.create_btn.configure(state='normal')
+        self.create_btn.configure(state='normal', text='Начать проверку')
+        self.current_id = pid
         self.update_history()
-        self.current_id=pid
-        self._issue_render_signature=None
+        self._issue_render_signature = None
+        self._show_project_view()
         self.render_job()
         self.resume_job()
 
     def _create_failed(self,error):
-        self.create_btn.configure(state='normal')
-        self.job_summary.configure(text='Создание проекта не завершилось')
+        self.create_btn.configure(state='normal', text='Начать проверку')
         messagebox.showerror('Не удалось создать проект',error)
 
     def update_history(self):
@@ -408,11 +537,56 @@ class App:
             completed=sum(p['status']=='done' for p in j['parts'])
             self.history.insert('end',f'  {j["audio_name"][:21]}  ({completed}/{len(j["parts"])})')
         if old in self.history_ids:
-            k=self.history_ids.index(old)
-            self.history.selection_set(k)
-        elif jobs and old is None:
-            self.current_id=jobs[0]['id']
-            self.history.selection_set(0)
+            self._select_history_row(self.history_ids.index(old))
+
+    def _select_history_row(self, index: int):
+        self.history.selection_clear(0, 'end')
+        self.history.selection_set(index)
+        self.history.see(index)
+
+    def delete_project(self):
+        # Prefer the highlighted history entry, not a previously visible project.
+        picked = self.history.curselection()
+        pid = self.history_ids[picked[0]] if picked else self.current_id
+        if not pid:
+            messagebox.showinfo('Удаление проекта', 'Сначала выбери проект слева.')
+            return
+        try:
+            job = worker.load_job(pid)
+        except (OSError, ValueError) as ex:
+            messagebox.showerror('Не удалось найти проект', str(ex))
+            return
+        if pid in worker.ACTIVE or job.get('status') in ('running','model_loading','pausing'):
+            messagebox.showwarning('Идёт проверка',
+                                   'Сначала нажми «Пауза» и дождись остановки текущего фрагмента.')
+            return
+        ready = sum(p.get('status') == 'done' for p in job.get('parts', []))
+        if not messagebox.askyesno('Удалить проект?',
+            f'Удалить «{job.get("audio_name", "Проект") }»?\n\n'
+            f'Готовых частей: {ready}. Будут навсегда удалены копия аудио, рукопись, '
+            'промежуточные результаты и все отчёты этого проекта.\n\n'
+            'Сохранённые отдельно Word-файлы останутся на диске.',
+            icon='warning', parent=self.root):
+            return
+        try:
+            delete_saved_project(pid)
+        except (OSError, ValueError, RuntimeError) as ex:
+            messagebox.showerror('Не удалось удалить проект', str(ex))
+            return
+        self._clip_seq += 1
+        self.player.stop()
+        if self._preview_path:
+            self._preview_path = None
+        self._issue_render_signature = None
+        self.current_id = None
+        self.update_history()
+        if self.history_ids:
+            self.current_id = self.history_ids[0]
+            self._select_history_row(0)
+            self._show_project_view()
+            self.render_job()
+        else:
+            self._choose_new()
 
     def _history_click(self,event):
         pick=self.history.curselection()
@@ -421,6 +595,8 @@ class App:
             self._issue_render_signature=None
             self._clip_seq+=1
             self.player.stop()
+            self._show_project_view()
+            self.page_canvas.yview_moveto(0)
             self.render_job()
 
     def job(self):
@@ -436,6 +612,10 @@ class App:
         states={'ready':'Готов к проверке','running':'Проверка','model_loading':'Загрузка модели',
                 'paused':'Пауза','pausing':'Приостанавливается','completed':'Готово','error':'Ошибка'}
         self.job_state.configure(text=states.get(job['status'],job['status']))
+        self.resume_btn.configure(state='disabled' if job['status'] in
+                                  ('running','model_loading','pausing','completed') else 'normal')
+        self.pause_btn.configure(state='normal' if job['status'] in
+                                 ('running','model_loading') else 'disabled')
         self.progress['value']=100*job.get('processed_seconds',0)/max(1,job['duration'])
         ready=sum(p['status']=='done' for p in job['parts'])
         self.job_summary.configure(text=f'{ready}/{len(job["parts"])} частей  •  {fmt_time(job.get("processed_seconds",0))} / {fmt_time(job["duration"])}  •  {job.get("message","")}')
@@ -475,6 +655,10 @@ class App:
                 labels.get(issue['kind'],issue['kind']),issue.get('spoken','')[:100],issue.get('expected','')[:100]))
             if issue['id']==selected_id:
                 self.tree.selection_set(str(i))
+        if self._issue_rows:
+            self.empty_issues.place_forget()
+        else:
+            self.empty_issues.place(relx=.5, rely=.5, anchor='center')
 
     def resume_job(self):
         if not self.current_id:return

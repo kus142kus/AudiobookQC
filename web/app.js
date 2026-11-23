@@ -1,7 +1,7 @@
 'use strict';
 const $ = (id) => document.getElementById(id);
 const state = {id:null, view:'new', audio:'', text:'', all:false, project:null, projects:[], selected:null, page:0, clip:null, busy:false};
-const labels = {replacement:'Замена', omission:'Пропуск', repeat:'Повтор', extra:'Вне текста', uncertain:'Сомнительно', clipping:'Звук', profanity:'Реплика'};
+const labels = {replacement:'Замена', omission:'Пропуск', repeat:'Повтор', extra:'Вне текста', uncertain:'Сомнительно', clipping:'Перегрузка', profanity:'Реплика', sound_event:'Звуковое событие', hum:'Гул', hiss:'Шипение', click:'Щелчок', level_jump:'Громкость', stress:'Ударение?', intonation:'Интонация?'};
 const statuses = {ready:'Готов к проверке',running:'Идёт проверка',model_loading:'Загрузка моделей',pausing:'Приостанавливается',paused:'Пауза',completed:'Завершено',error:'Ошибка'};
 const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 const shortName = path => path ? path.replaceAll('\\','/').split('/').pop() : '';
@@ -51,7 +51,7 @@ function renderIssues(issues){
  $('markFixed').disabled=selected.review==='fixed';$('markFalse').disabled=selected.review==='false';}
 }
 async function choose(kind){try{const path=await invoke('pick_file',kind);if(path){state[kind]=path;$(kind==='audio'?'audioLabel':'textLabel').textContent=shortName(path)}}catch(e){notify(e.message||e)}}
-async function create(){if(!state.audio||!state.text)return notify('Выбери аудиозапись и рукопись.');if(state.busy)return;state.busy=true;const btn=$('createBtn');btn.disabled=true;btn.textContent='Создаём проект…';try{const id=await invoke('new_project',state.audio,state.text,+$('minutes').value);await refreshProjects();await openProject(id)}catch(e){notify('Не удалось начать проверку: '+(e.message||e))}finally{state.busy=false;btn.disabled=false;btn.innerHTML='Начать проверку <span>→</span>'}}
+async function create(){if(!state.audio||!state.text)return notify('Выбери аудиозапись и рукопись.');if(state.busy)return;state.busy=true;const btn=$('createBtn');btn.disabled=true;btn.textContent='Создаём проект…';try{const id=await invoke('new_project',state.audio,state.text,+$('minutes').value,$('glossary').value);await refreshProjects();await openProject(id)}catch(e){notify('Не удалось начать проверку: '+(e.message||e))}finally{state.busy=false;btn.disabled=false;btn.innerHTML='Начать проверку <span>→</span>'}}
 async function updateJob(operation){if(!state.id)return;try{await invoke(operation,state.id);await refreshProject()}catch(e){notify(e.message||e)}}
 async function removeProject(pid){const project=state.projects.find(p=>p.id===pid);if(!project)return;
  if(isRunning(project.status))return notify('Сначала приостановите проверку и дождитесь полной остановки.');

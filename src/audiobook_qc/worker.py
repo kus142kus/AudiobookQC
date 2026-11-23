@@ -182,7 +182,19 @@ def model_worker(pid: str):
             job['message'] = 'Загрузка второй локальной модели GigaAM…'
             save_job(job)
             verifier = load_secondary_model()
-        doc = tokenize(source_text(job_dir(pid) / "inputs" / job["text_stored"]))
+        raw_manuscript = source_text(job_dir(pid) / "inputs" / job["text_stored"])
+        doc = tokenize(raw_manuscript)
+        quality_on = job.get('quality_mode') == 'extended-v1'
+        detector = None
+        glossary = {}
+        if quality_on and pending:
+            from .events import AudioEventDetector
+            from .linguistics import glossary_lines
+            glossary_file = job_dir(pid) / 'inputs' / 'glossary.txt'
+            glossary = glossary_lines(glossary_file.read_text(encoding='utf-8') if glossary_file.exists() else '')
+            job['message'] = 'Загрузка локальной модели звуковых событий…'
+            save_job(job)
+            detector = AudioEventDetector()
         if len(doc) < 20:
             raise ValueError("В исходном тексте слишком мало слов для достоверного сравнения")
         audio = job_dir(pid) / "inputs" / job["audio_stored"]
@@ -239,6 +251,11 @@ def model_worker(pid: str):
                         cut_audio(audio, decode_start, decode_end-decode_start, temp_file)
                         words = transcribe_chunk(model, temp_file, decode_start, pos, finish)
                         acoustic = inspect_wav(temp_file, decode_start, pos, finish)
+                        if quality_on:
+                            from .linguistics import acoustic_stress_candidates, intonation_candidates
+                            acoustic.extend(detector.inspect(temp_file, decode_start, pos, finish))
+                            acoustic.extend(acoustic_stress_candidates(temp_file, decode_start, pos, finish, words, glossary))
+                            acoustic.extend(intonation_candidates(temp_file, decode_start, pos, finish, words, raw_manuscript))
                     chunk_data = {"start":pos,"end":finish,"words":words, "acoustic":acoustic}
                     write_json(chunk_path, chunk_data)
                 part_words.extend(chunk_data["words"])
@@ -251,6 +268,9 @@ def model_worker(pid: str):
             # Part completed: emit its report IMMEDIATELY, no waiting for other parts.
             previous = read_json(job_dir(pid) / "parts" / f"part-{part['index']-1:03d}.json", {}) if part["index"] > 1 else {}
             issues, new_cursor, alignment = compare(doc, part_words, cursor, previous.get("tail_words", []))
+            if quality_on:
+                from .linguistics import annotate_term_issues
+                annotate_term_issues(issues, raw_manuscript, glossary)
             if not part_words:
                 for issue in issues:
                     if issue["kind"] == "uncertain":

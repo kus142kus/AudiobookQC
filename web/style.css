@@ -7,3 +7,5 @@
 @media(max-width:900px){.sidebar{width:192px}.brand strong{font-size:15px}.content{padding:22px 18px 50px}.feature-grid,.stat-grid{grid-template-columns:repeat(2,1fr)}.parts-grid{grid-template-columns:1fr}.upload-card{padding:20px}.issue{grid-template-columns:80px 80px 1fr 1fr 10px;gap:6px}}
 
 .player-options{display:flex;align-items:center;gap:16px;color:var(--sub)}.player-options select{border:1px solid var(--border);padding:7px;background:white;border-radius:8px;color:var(--ink)}
+
+#glossary{box-sizing:border-box;display:block;width:100%;min-height:75px;resize:vertical;padding:13px;margin-bottom:7px;border:1px solid var(--border);border-radius:11px;background:#fff;color:var(--ink);font:inherit;line-height:1.5;}

@@ -42,7 +42,8 @@ class OfflineTests(unittest.TestCase):
                 f.writeframes(b'\0\0'*4000)
             with patch.object(worker,'ROOT',root), patch('audiobook_qc.desktop.resolve_model',return_value=Path('unused')), \
                  patch('audiobook_qc.desktop.worker.audio_duration',return_value=6*3600), \
-                 patch('audiobook_qc.dual_engine.resolve_secondary_dir',return_value=Path('unused')):
+                 patch('audiobook_qc.dual_engine.resolve_secondary_dir',return_value=Path('unused')), \
+                 patch('audiobook_qc.events._manifest_verified'):
                 pid=create_project(root/'audio.wav',root/'book.txt',20)
                 j=worker.load_job(pid)
                 self.assertEqual(len(j['parts']),18)

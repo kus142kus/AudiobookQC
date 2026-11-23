@@ -47,6 +47,9 @@ def self_test() -> None:
     import docx
     import sounddevice
     import webview
+    import onnxruntime
+    from audiobook_qc.events import _manifest_verified, model_dir
+    _manifest_verified(model_dir())
     from audiobook_qc.desktop_web import bundled_html
     html = bundled_html()
     assert "id=\"projectView\"" in html, "Desktop WebView interface missing"
@@ -70,6 +73,15 @@ def single_model_test(which: str) -> None:
                 word_timestamps=False, condition_on_previous_text=False,
                 beam_size=1, temperature=0)
             list(chunks)
+        elif which == "events":
+            _stage("Loading YAMNet event detector")
+            from audiobook_qc.events import AudioEventDetector
+            detector = AudioEventDetector()
+            _stage("Running YAMNet 3-second inference")
+            with wave.open(str(wav),"wb") as f:
+                f.setnchannels(1); f.setsampwidth(2); f.setframerate(16000)
+                f.writeframes(b"\x00\x00"*16000*3)
+            assert isinstance(detector.inspect(wav,0,0,3),list)
         elif which == "gigaam":
             import faulthandler
             import os
@@ -102,6 +114,7 @@ if __name__ == "__main__":
     parser.add_argument('--smoke-gui', action='store_true')
     parser.add_argument('--test-whisper', action='store_true')
     parser.add_argument('--test-gigaam', action='store_true')
+    parser.add_argument('--test-events', action='store_true')
     args=parser.parse_args()
     if args.self_test:
         self_test()
@@ -109,6 +122,8 @@ if __name__ == "__main__":
         single_model_test("whisper")
     elif args.test_gigaam:
         single_model_test("gigaam")
+    elif args.test_events:
+        single_model_test("events")
     elif args.smoke_gui:
         from audiobook_qc.desktop_web import app_window
         app_window(smoke=True)

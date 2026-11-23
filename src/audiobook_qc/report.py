@@ -13,7 +13,10 @@ from .analysis import fmt_time, effective_severity
 CATEGORIES = {
     "repeat": "Повтор / дубль", "omission": "Пропуск фрагмента",
     "replacement": "Замена / оговорка", "extra": "Лишняя фраза",
-    "uncertain": "Проверить вручную", "profanity": "Возможная бранная реплика", "clipping": "Возможная перегрузка звука"
+    "uncertain": "Проверить вручную", "profanity": "Возможная бранная реплика", "clipping": "Возможная перегрузка звука",
+    "sound_event": "Посторонний звук (предположение)", "hum": "Возможный сетевой гул", "hiss": "Шипение / фоновый шум",
+    "click": "Возможный щелчок", "level_jump": "Перепад уровня", "stress": "Подозрение на ударение",
+    "intonation": "Интонация: проверить на слух"
 }
 COLORS = {"navy": "173C60", "blue": "236B9F", "light": "EAF2F8", "muted": "536679"}
 
@@ -38,7 +41,7 @@ def set_cell_text(cell, value: str, is_header=False):
     cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
 
 
-def _build_doc(title: str, subtitle: str, rows: list[dict], metadata: dict) -> Document:
+def _build_doc(title: str, subtitle: str, rows: list[dict], metadata: dict, advisory: list[dict] | None = None) -> Document:
     d = Document()
     sec = d.sections[0]
     sec.page_height, sec.page_width = Cm(29.7), Cm(21.0)
@@ -110,6 +113,7 @@ def _build_doc(title: str, subtitle: str, rows: list[dict], metadata: dict) -> D
                     cell_shading(cells[i], "F3F7FA")
         return tbl
 
+    advisory = advisory or []
     repeating_issues = [r for r in rows if r["kind"] == "repeat"]
     audio_issues = [r for r in rows if r["kind"] == "clipping"]
     profanity_issues = [r for r in rows if r["kind"] == "profanity"]
@@ -128,6 +132,13 @@ def _build_doc(title: str, subtitle: str, rows: list[dict], metadata: dict) -> D
         r.font.color.rgb = RGBColor.from_string(COLORS["blue"])
         r.font.size = Pt(11)
         issue_table(items)
+    if advisory:
+        h=d.add_paragraph()
+        h.add_run('5. ЗВУК, УДАРЕНИЯ И ИНТОНАЦИЯ — ТОЛЬКО ДЛЯ ПРОСЛУШИВАНИЯ').bold=True
+        d.add_paragraph('Эти предположения не подтверждены человеком и не являются установленным браком. Некоторые, особенно ударения и интонация, основаны лишь на приближённых акустических признаках.')
+        issue_table(advisory[:35])
+        if len(advisory)>35:
+            d.add_paragraph(f'Ещё {len(advisory)-35} подозрительных звуковых событий сохранены в расширенном журнале проекта.')
     if metadata.get("uncertain", 0):
         p = d.add_paragraph()
         p.paragraph_format.space_before = Pt(9)
@@ -137,8 +148,8 @@ def _build_doc(title: str, subtitle: str, rows: list[dict], metadata: dict) -> D
     note.paragraph_format.space_before = Pt(8)
     note.add_run("Важно: ").bold = True
     note.add_run("это автоматические предположения на основе распознавания речи. "
-                 "Все значимые находки нужно прослушать. Ударения и все фоновые звуки "
-                 "в этой версии не проверяются надёжно.")
+                 "Все значимые находки нужно прослушать. Звуковая модель и акустический анализ "
+                 "не гарантируют обнаружения всех помех. Ударения и интонация проверяются только экспериментально.")
     note.runs[-1].font.size = Pt(8)
     footer = sec.footer.paragraphs[0]
     footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -163,6 +174,11 @@ def generate_report(path: Path, project: dict, issues: list[dict], start: float,
         row = item.copy()
         row["review"] = reviews.get(item["id"], "todo")
         rows.append(row)
+    advice_kinds={'sound_event','hum','hiss','click','level_jump','stress','intonation'}
+    advisory=[]
+    for item in sorted(issues,key=lambda x:x['start']):
+        if item.get('kind') in advice_kinds and reviews.get(item.get('id')) != 'false':
+            row=item.copy();row['review']=reviews.get(item['id'],'todo');advisory.append(row)
     path.parent.mkdir(parents=True, exist_ok=True)
     label = "ВЕСЬ АУДИОФАЙЛ" if final else f"ЧАСТЬ · {fmt_time(start)}–{fmt_time(end)}"
     d = _build_doc("ПОДОЗРИТЕЛЬНЫЕ МЕСТА ДЛЯ ПРОВЕРКИ", label,
@@ -172,7 +188,7 @@ def generate_report(path: Path, project: dict, issues: list[dict], start: float,
                           "dual_mode":project.get('report_policy') == 'dual-gigaam',
                           "not_rechecked":sum(i.get('kind') in ('replacement','omission','extra','repeat')
                                                 and not i.get('dual_checked') for i in issues),
-                          "uncertain":sum(i["kind"] == "uncertain" for i in issues)})
+                          "uncertain":sum(i["kind"] == "uncertain" for i in issues)}, advisory=advisory)
     # Atomic replacement so a download never sees a half-written DOCX.
     tmp = path.with_suffix(".pending.docx")
     d.save(str(tmp))

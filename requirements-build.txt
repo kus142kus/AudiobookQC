@@ -16,3 +16,6 @@ sentencepiece>=0.2,<1
 
 # Modern, offline HTML/CSS desktop window; system WebView2 / WKWebView.
 pywebview>=5.4,<7
+
+# Offline YAMNet ONNX event classifier (bundled at build time)
+onnxruntime>=1.19,<2.0
