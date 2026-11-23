@@ -1,4 +1,4 @@
-name: Audiobook QC 0.6 - native offline desktop builds
+name: Audiobook QC 0.7 - extended offline quality checks
 
 on:
   workflow_dispatch:
@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - 'src/**'
+      - 'web/**'
       - 'scripts/**'
       - 'tests/**'
       - 'requirements*.txt'
@@ -60,12 +61,39 @@ jobs:
           assert transformers.__version__ == '4.57.1'
           print('Dependency audit passed:', torch.__version__, transformers.__version__, flush=True)
           PYCODE
+      - name: Audit all source imports and UI-to-backend methods BEFORE model download
+        shell: bash
+        run: python scripts/preflight_source.py
       - name: Run source unit and integration tests
         shell: bash
         run: python -m unittest discover -s tests -v
       - name: Download and checksum BOTH models on BUILD MACHINE ONLY
         shell: bash
         run: python scripts/get_offline_model.py
+      - name: Download and checksum local sound-event model (YAMNet)
+        shell: bash
+        run: python scripts/get_event_model.py
+      - name: Verify offline event model and perform 3-second ONNX inference
+        shell: bash
+        env:
+          HF_HUB_OFFLINE: '1'
+          TRANSFORMERS_OFFLINE: '1'
+        run: |
+          python - <<'PYCODE'
+          import sys, tempfile, wave
+          from pathlib import Path
+          sys.path.insert(0,'src')
+          from audiobook_qc.events import AudioEventDetector
+          detector = AudioEventDetector()
+          with tempfile.TemporaryDirectory() as td:
+              wav=Path(td)/'test.wav'
+              with wave.open(str(wav),'wb') as f:
+                  f.setnchannels(1); f.setsampwidth(2); f.setframerate(16000)
+                  f.writeframes(b'\x00\x00'*16000*3)
+              result=detector.inspect(wav,0,0,3)
+              assert isinstance(result,list)
+          print('AUDIOBOOK_QC_YAMNET_REAL_INFERENCE_OK',flush=True)
+          PYCODE
       - name: Verify downloaded GigaAM shortform-only patch and checksum
         shell: bash
         run: |
@@ -140,6 +168,7 @@ jobs:
             --collect-all omegaconf \
             --collect-all hydra \
             --collect-all sentencepiece \
+            --collect-all onnxruntime \
             run.py
       - name: Smoke test packaged EXE / app with real LOCAL models
         shell: bash
@@ -149,20 +178,20 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path dist/AudiobookQC -DestinationPath dist/AudiobookQC-Windows-x64-offline.zip -Force
+          Compress-Archive -Path dist/AudiobookQC -DestinationPath dist/AudiobookQC-Windows.zip -Force
       - name: DMG Apple Silicon app
         if: runner.os == 'macOS'
         shell: bash
         run: |
           hdiutil create -volname 'Audiobook QC Offline' \
             -srcfolder dist/AudiobookQC.app -ov -format UDZO \
-            dist/AudiobookQC-Mac-Apple-Silicon-offline.dmg
+            dist/AudiobookQC-Mac.dmg
       - name: Upload tested package
         uses: actions/upload-artifact@v4
         with:
-          name: AudiobookQC-${{ matrix.target }}-offline
+          name: AudiobookQC-${{ matrix.target }}
           path: |
-            dist/AudiobookQC-${{ matrix.target }}-offline.zip
-            dist/AudiobookQC-${{ matrix.target }}-offline.dmg
+            dist/AudiobookQC-Windows.zip
+            dist/AudiobookQC-Mac.dmg
           if-no-files-found: error
           retention-days: 15
