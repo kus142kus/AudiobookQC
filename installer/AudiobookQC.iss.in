@@ -1,0 +1,82 @@
+; One-click release installer. The source repo never contains gigabyte models.
+; The user needs only this EXE; Whisper is automatically retrieved from the
+; same public GitHub Release, checked against a pinned SHA-256, and extracted.
+; Internet is required for setup ONCE; the application is strictly offline.
+#define CIBuild @@TEST@@
+[Setup]
+AppId=@@APPID@@
+AppName=Audiobook QC
+AppVersion=@@VERSION@@
+AppPublisher=Audiobook QC contributors
+AppPublisherURL=https://github.com/kus142kus/AudiobookQC
+DefaultDirName={localappdata}\Programs\AudiobookQC
+DefaultGroupName=Audiobook QC
+UninstallDisplayName=Audiobook QC
+PrivilegesRequired=lowest
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+OutputDir=@@OUT@@
+OutputBaseFilename=@@FILENAME@@
+Compression=lzma2
+SolidCompression=yes
+WizardStyle=modern
+DisableProgramGroupPage=yes
+ArchiveExtraction=full
+DiskSpanning=no
+; Important: audio projects are in %LOCALAPPDATA%\AudiobookQC, NOT {app}.
+; Uninstallation must never destroy the user's books or reports.
+
+[Languages]
+Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
+Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Files]
+Source: "@@STAGED@@\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Inno handles download, hash verification, progress and ZIP extraction.
+; No extra tools, no second manual ZIP and no browser are required.
+Source: "@@MODEL_SOURCE@@"; DestDir: "{app}"; DestName: "AQC-Model.zip"; ExternalSize: @@MODEL_BYTES@@; Hash: "@@MODEL_SHA@@"; Flags: @@MODEL_FLAGS@@; Check: NeedsWhisperDownload
+
+[Icons]
+Name: "{autoprograms}\Audiobook QC"; Filename: "{app}\AudiobookQC.exe"; WorkingDir: "{app}"
+Name: "{autodesktop}\Audiobook QC"; Filename: "{app}\AudiobookQC.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+
+[Tasks]
+Name: "desktopicon"; Description: "Create desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: unchecked
+
+[Run]
+Filename: "{app}\AudiobookQC.exe"; Description: "Run Audiobook QC"; Flags: nowait postinstall skipifsilent
+
+[Code]
+function NeedsWhisperDownload(): Boolean;
+var
+  ModelPath: String;
+begin
+  ModelPath := ExpandConstant('{app}\_internal\models\medium\model.bin');
+  Result := True;
+  if FileExists(ModelPath) then
+  begin
+    if CompareText(GetSHA256OfFile(ModelPath), '@@MODEL_BIN_SHA@@') = 0 then
+    begin
+      Log('Whisper model already installed and SHA-256 verified. Reusing files.');
+      Result := False;
+    end;
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ExitCode: Integer;
+begin
+  if CurStep = ssPostInstall then
+  begin
+    if not FileExists(ExpandConstant('{app}\_internal\models\medium\model.bin')) then
+      RaiseException('Whisper model was not installed. Setup cannot finish without offline speech model.');
+#if CIBuild == 0
+    if not Exec(ExpandConstant('{app}\AudiobookQC.exe'), '--self-test',
+       ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ExitCode) then
+      RaiseException('Unable to start the installed app self-test. See the installer log.');
+    if ExitCode <> 0 then
+      RaiseException('Offline models or libraries failed the installed app self-test. See the installer log.');
+#endif
+  end;
+end;
