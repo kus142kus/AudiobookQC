@@ -40,11 +40,12 @@ def verify(executable: Path, flag: str, timeout: int) -> None:
 def main() -> None:
     exe = Path(sys.argv[1]).resolve()
     assert exe.is_file(), f"Executable missing: {exe}"
-    for flag, timeout in (("--self-test", 180),
+    # GUI first: on a broken runtime, fail in seconds, not after loading all ML models.
+    for flag, timeout in (("--smoke-gui", 120),
+                          ("--self-test", 180),
                           ("--test-whisper", 480),
                           ("--test-gigaam", 480),
-                          ("--test-events", 180),
-                          ("--smoke-gui", 120)):
+                          ("--test-events", 180)):
         verify(exe, flag, timeout)
     print("AUDIOBOOK_QC_NATIVE_DESKTOP_OK", flush=True)
 

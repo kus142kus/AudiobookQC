@@ -246,9 +246,40 @@ class Bridge:
         return True
 
 
+def preferred_gui_backend(platform: str | None = None) -> str | None:
+    """Use bundled Qt WebEngine on Windows, avoiding pythonnet/WinForms entirely.
+
+    The former Windows WinForms renderer required Python.Runtime.dll and could
+    pass CI while failing on a user's PC. macOS keeps its built-in WKWebView.
+    """
+    platform = sys.platform if platform is None else platform
+    return "qt" if platform == "win32" else None
+
+
+def verify_gui_backend() -> str:
+    """Fail with an actionable error before starting the GUI or loading models."""
+    backend = preferred_gui_backend()
+    if backend == "qt":
+        # QtPy must not select an unrelated installed Qt binding.
+        os.environ["QT_API"] = "pyside6"
+        try:
+            from PySide6.QtCore import QLibraryInfo  # noqa: F401
+            from PySide6.QtWebEngineWidgets import QWebEngineView  # noqa: F401
+            from PySide6.QtWebChannel import QWebChannel  # noqa: F401
+        except (ImportError, OSError) as exc:
+            raise RuntimeError(
+                "Не найден встроенный Qt WebEngine. Требуется исправленная "
+                "сборка Audiobook QC; устанавливать Python или .NET не нужно."
+            ) from exc
+        return "qt"
+    return "system-webkit"
+
+
 def app_window(smoke: bool = False):
-    """Show HTML/CSS in native WebView without starting any HTTP server."""
+    """Show the bundled HTML in a native window, never in an external browser."""
     offline_environment()
+    renderer = preferred_gui_backend()
+    verify_gui_backend()
     import webview
     api = Bridge()
     window = webview.create_window("Audiobook QC — Проверка озвучки", html=bundled_html(),
@@ -256,12 +287,39 @@ def app_window(smoke: bool = False):
                                    min_size=(900, 600), background_color="#f5f8fb")
     api.window = window
     window.events.closed += api.shutdown
+    kwargs = {"debug": False, "http_server": False}
+    if renderer:
+        kwargs["gui"] = renderer
     if smoke:
-        # PyInstaller GUI smoke test: open the REAL WebView window and close it.
+        # THIS IS A REAL UI test, not merely an import or a 1-second timer.
+        # Failure must reach the caller (and fail GitHub Actions).
         import time
-        def close_soon():
-            time.sleep(1.3)
-            window.destroy()
-        webview.start(func=close_soon, debug=False, http_server=False)
+        problems: list[str] = []
+
+        def check_then_close():
+            try:
+                if not window.events.loaded.wait(30):
+                    raise RuntimeError("Desktop window never reached DOM-loaded state")
+                # Injected JS bridge may become ready just after DOM-loaded.
+                for _ in range(60):
+                    result = window.evaluate_js('''
+                        Boolean(document.getElementById("projectView") &&
+                                document.getElementById("partsGrid") &&
+                                window.pywebview && window.pywebview.api &&
+                                window.pywebview.api.get_projects)
+                    ''')
+                    if result:
+                        break
+                    time.sleep(0.2)
+                else:
+                    raise RuntimeError("UI loaded but project elements or JS-Python bridge missing")
+            except Exception as exc:
+                problems.append(f"{type(exc).__name__}: {exc}")
+            finally:
+                window.destroy()
+
+        webview.start(func=check_then_close, **kwargs)
+        if problems:
+            raise RuntimeError("Native GUI smoke test failed: " + "; ".join(problems))
     else:
-        webview.start(debug=False, http_server=False)
+        webview.start(**kwargs)
