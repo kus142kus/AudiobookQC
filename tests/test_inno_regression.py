@@ -50,6 +50,12 @@ class InstallerInnoRegressions(unittest.TestCase):
         template = (ROOT / 'installer/AudiobookQC.iss.in').read_text(encoding='utf-8')
         self.assertIn("Log('AQC installer actual destination: '", template)
 
+    def test_installer_verifies_extracted_model_hash_after_install(self):
+        template = (ROOT / 'installer/AudiobookQC.iss.in').read_text(encoding='utf-8')
+        self.assertIn('Whisper model SHA-256 verification failed after installation', template)
+        self.assertIn('GetSHA256OfFile(ExpandConstant(', template)
+        self.assertIn("'@@MODEL_BIN_SHA@@') <> 0", template)
+
     def test_ci_failure_reports_missing_file_log_and_tree(self):
         with tempfile.TemporaryDirectory() as t:
             folder = Path(t)

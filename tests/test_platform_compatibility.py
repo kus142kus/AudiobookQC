@@ -33,7 +33,7 @@ class RunnerChecks(unittest.TestCase):
     def test_macos_arm_binary_check_and_dmg_verify_preserved(self):
         s=(ROOT/'.github/workflows/build.yml').read_text(encoding='utf-8')
         self.assertIn('macos_bundle_audit.py', s)
-        self.assertIn('hdiutil verify', s)
+        self.assertIn('scripts/macos_dmg.py --verify', s)
         self.assertIn('--smoke-gui', s)
         self.assertIn('check_release_assets.py', s)
     def test_both_platforms_ship_same_word_generator(self):

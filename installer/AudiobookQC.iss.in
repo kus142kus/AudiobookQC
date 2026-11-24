@@ -72,6 +72,9 @@ begin
     Log('AQC installer actual destination: ' + ExpandConstant('{app}'));
     if not FileExists(ExpandConstant('{app}\_internal\models\medium\model.bin')) then
       RaiseException('Whisper model was not installed. Setup cannot finish without offline speech model.');
+    if CompareText(GetSHA256OfFile(ExpandConstant('{app}\_internal\models\medium\model.bin')),
+       '@@MODEL_BIN_SHA@@') <> 0 then
+      RaiseException('Whisper model SHA-256 verification failed after installation. Offline model is corrupt.');
 #if CIBuild == 0
     if not Exec(ExpandConstant('{app}\AudiobookQC.exe'), '--self-test',
        ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ExitCode) then
