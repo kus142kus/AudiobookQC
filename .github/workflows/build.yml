@@ -67,6 +67,26 @@ jobs:
       - name: Run source unit and integration tests
         shell: bash
         run: python -m unittest discover -s tests -v
+      - name: Exercise native desktop renderer BEFORE downloading models
+        shell: bash
+        run: |
+          # Launch the ACTUAL GUI using the same renderer selected in production.
+          # A broken UI must fail before multi-GB model downloads.
+          python run.py --smoke-gui
+      - name: Confirm Windows GUI avoids pythonnet / WinForms
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          python - <<'PYCODE'
+          from PySide6.QtWebEngineWidgets import QWebEngineView
+          from PySide6.QtWebChannel import QWebChannel
+          import sys
+          sys.path.insert(0, 'src')
+          from audiobook_qc.desktop_web import preferred_gui_backend, verify_gui_backend
+          assert preferred_gui_backend() == 'qt'
+          assert verify_gui_backend() == 'qt'
+          print('AUDIOBOOK_QC_WINDOWS_QT_WEBENGINE_OK', flush=True)
+          PYCODE
       - name: Download and checksum BOTH models on BUILD MACHINE ONLY
         shell: bash
         run: python scripts/get_offline_model.py
@@ -149,10 +169,23 @@ jobs:
         shell: bash
         run: |
           python -c "import shutil; s=shutil.disk_usage('.'); print('Available GiB:',round(s.free/(1024**3),2)); assert s.free > 3*1024**3, 'Insufficient disk for bundled models'"
-      - name: Build self-contained app (no browser, no model downloads at runtime)
+      - name: Build self-contained app (native offline UI, Qt on Windows)
         shell: bash
         run: |
+          extra=()
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            # Keep the .NET pythonnet runtime OUT of the Windows executable.
+            # Force and bundle the same Qt WebEngine used by the preflight.
+            extra+=(--hidden-import webview.platforms.qt)
+            extra+=(--hidden-import PySide6.QtWebEngineWidgets)
+            extra+=(--hidden-import PySide6.QtWebEngineCore)
+            extra+=(--hidden-import PySide6.QtWebChannel)
+            extra+=(--exclude-module pythonnet --exclude-module clr --exclude-module clr_loader)
+            extra+=(--exclude-module webview.platforms.winforms)
+            extra+=(--exclude-module PyQt5 --exclude-module PyQt6 --exclude-module PySide2)
+          fi
           python -m PyInstaller --noconfirm --clean --onedir --windowed \
+            "${extra[@]}" \
             --name AudiobookQC --paths src \
             --add-data 'models:models' \
             --add-data 'web:web' \
@@ -170,7 +203,7 @@ jobs:
             --collect-all sentencepiece \
             --collect-all onnxruntime \
             run.py
-      - name: Smoke test packaged EXE / app with real LOCAL models
+      - name: Verify REAL frozen GUI and all bundled local models
         shell: bash
         run: |
           python scripts/check_bundle.py "${{ runner.os == 'Windows' && 'dist/AudiobookQC/AudiobookQC.exe' || 'dist/AudiobookQC.app/Contents/MacOS/AudiobookQC' }}"
