@@ -130,11 +130,11 @@ def render(manifest: dict, *, staged: Path = STAGED, filename: Path = GENERATED,
     file_source = str(Path(staged).resolve()).replace('/', '\\')
     if source_override:
         model_source = str(source_override).replace('/', '\\')
-        model_flags = 'external extractarchive ignoreversion'
+        model_flags = 'external extractarchive recursesubdirs createallsubdirs ignoreversion'
         model_destname = ''  # Inno forbids DestName with local extractarchive.
     else:
         model_source = manifest['url']
-        model_flags = 'external download extractarchive ignoreversion'
+        model_flags = 'external download extractarchive recursesubdirs createallsubdirs ignoreversion'
         model_destname = 'DestName: \"AQC-Model.zip\"; '  # Required for downloads.
     values = {
         '@@STAGED@@': file_source,
@@ -237,6 +237,43 @@ def source_self_test() -> None:
     print('AQC_WINDOWS_INSTALLER_SOURCE_TEST_OK', flush=True)
 
 
+def _inno_failure_details(log_path: Path, installation: Path, folder: Path) -> str:
+    """Keep actionable diagnostics visible even when CI cleans the temp folder."""
+    info = [f'Expected installation directory: {installation}']
+    if log_path.is_file():
+        log = log_path.read_text(encoding='utf-8-sig', errors='replace')
+        info.append('Inno Setup log (last 8000 characters):\n' + log[-8000:])
+    else:
+        info.append('Inno Setup did not write a log at: ' + str(log_path))
+    if installation.is_dir():
+        paths = sorted(str(p.relative_to(installation)) for p in installation.rglob('*'))
+        info.append('Files in expected install directory (first 80):\n' +
+                    '\n'.join(paths[:80]))
+        info.append(f'Total installed paths found: {len(paths)}')
+    else:
+        info.append('Expected installation directory does not exist')
+    # Detect an unexpected nested root/destination without walking the 140 MB
+    # fixture itself. No model weights are opened here.
+    misplaced = [p for p in folder.rglob('model.bin') if p.is_file()]
+    info.append('Model files elsewhere under test root: ' +
+                ', '.join(str(p) for p in misplaced[:12]))
+    return '\n'.join(info)
+
+
+def _verify_inno_payload(payload: dict[str, bytes], installation: Path,
+                         log_path: Path, folder: Path) -> None:
+    for name, blob in payload.items():
+        installed = installation / name
+        if not installed.is_file():
+            raise RuntimeError(
+                f'Inno returned success but required file is missing: {name}\n'
+                + _inno_failure_details(log_path, installation, folder))
+        if installed.read_bytes() != blob:
+            raise RuntimeError(
+                f'Inno returned success but installed file content is wrong: {name}\n'
+                + _inno_failure_details(log_path, installation, folder))
+
+
 def integration_test_inno() -> None:
     """Compile AND run the real Inno extractor with local fixture payload.
 
@@ -267,17 +304,16 @@ def integration_test_inno() -> None:
                      source_override=str(archive), test=True, out_dir=folder)
         setup = compile_iss(iss, output_dir=folder, output_name='AQC-CI-Test')
         installation = folder / 'installation'
+        log_path = folder / 'setup.log'
         result = subprocess.run([
             str(setup), '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART',
-            '/SP-', '/DIR=' + str(installation), '/LOG=' + str(folder/'setup.log')
+            '/SP-', '/DIR=' + str(installation), '/LOG=' + str(log_path)
         ], timeout=180, check=False)
         if result.returncode != 0:
-            log = (folder/'setup.log')
-            details = log.read_text(encoding='utf-8-sig', errors='replace')[-3000:] if log.exists() else ''
-            raise RuntimeError(f'Inno CI installation failed: {result.returncode}\n{details}')
-        for name, blob in payload.items():
-            if (installation/name).read_bytes() != blob:
-                raise RuntimeError(f'Inno archive extraction path corrupted: {name}')
+            raise RuntimeError(
+                f'Inno CI installation failed: {result.returncode}\n'
+                + _inno_failure_details(log_path, installation, folder))
+        _verify_inno_payload(payload, installation, log_path, folder)
         uninstaller = installation / 'unins000.exe'
         if not uninstaller.exists():
             raise RuntimeError('Installer did not register an uninstaller')

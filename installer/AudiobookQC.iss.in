@@ -69,6 +69,7 @@ var
 begin
   if CurStep = ssPostInstall then
   begin
+    Log('AQC installer actual destination: ' + ExpandConstant('{app}'));
     if not FileExists(ExpandConstant('{app}\_internal\models\medium\model.bin')) then
       RaiseException('Whisper model was not installed. Setup cannot finish without offline speech model.');
 #if CIBuild == 0

@@ -30,7 +30,7 @@ class InstallerInnoRegressions(unittest.TestCase):
             script = file.read_text(encoding='utf-8-sig')
             model_entry = next(line for line in script.splitlines() if 'Hash:' in line)
             self.assertNotIn('DestName:', model_entry)
-            self.assertIn('Flags: external extractarchive ignoreversion', model_entry)
+            self.assertIn('Flags: external extractarchive recursesubdirs createallsubdirs ignoreversion', model_entry)
             self.assertNotIn(' download ', model_entry)
             self.assertIn('Hash: "' + 'a' * 64 + '"', model_entry)
             self.assertIn('OutputBaseFilename=AQC-CI-Test', script)
@@ -42,9 +42,40 @@ class InstallerInnoRegressions(unittest.TestCase):
             script = file.read_text(encoding='utf-8-sig')
             entry = next(line for line in script.splitlines() if 'Hash:' in line)
             self.assertIn('DestName: "AQC-Model.zip"', entry)
-            self.assertIn('Flags: external download extractarchive ignoreversion', entry)
+            self.assertIn('Flags: external download extractarchive recursesubdirs createallsubdirs ignoreversion', entry)
             self.assertIn(self._manifest()['url'], entry)
             self.assertIn('OutputBaseFilename=AQC-Setup', script)
+
+    def test_inno_template_logs_actual_install_destination(self):
+        template = (ROOT / 'installer/AudiobookQC.iss.in').read_text(encoding='utf-8')
+        self.assertIn("Log('AQC installer actual destination: '", template)
+
+    def test_ci_failure_reports_missing_file_log_and_tree(self):
+        with tempfile.TemporaryDirectory() as t:
+            folder = Path(t)
+            installation = folder / 'installation'
+            installation.mkdir()
+            (installation/'AudiobookQC.exe').write_bytes(b'MZok')
+            (folder/'setup.log').write_text('Destination directory: wrong place', encoding='utf-8')
+            with self.assertRaises(RuntimeError) as failure:
+                builder._verify_inno_payload(
+                    {'AudiobookQC.exe': b'MZok', '_internal/models/medium/model.bin': b'123'},
+                    installation, folder/'setup.log', folder)
+            report = str(failure.exception)
+            self.assertIn('model.bin', report)
+            self.assertIn('Destination directory: wrong place', report)
+            self.assertIn('AudiobookQC.exe', report)
+            self.assertIn('Expected installation directory:', report)
+
+    def test_ci_payload_checker_detects_damaged_file(self):
+        with tempfile.TemporaryDirectory() as t:
+            folder = Path(t)
+            installation = folder/'installation'
+            installation.mkdir()
+            (installation/'AudiobookQC.exe').write_bytes(b'bad')
+            with self.assertRaisesRegex(RuntimeError, 'file content is wrong'):
+                builder._verify_inno_payload(
+                    {'AudiobookQC.exe': b'MZok'}, installation, folder/'setup.log', folder)
 
     def test_compile_uses_explicit_test_output_dir_not_production_dist(self):
         with tempfile.TemporaryDirectory() as t:
