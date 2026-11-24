@@ -36,6 +36,9 @@ class OneClickInstallerTests(unittest.TestCase):
                     '_internal/models/medium/config.json',
                     '_internal/models/medium/tokenizer.json',
                 })
+            self.assertEqual(m['model_unpacked_bytes'],
+                             sum(len(v) for k,v in data.items() if k.startswith('_internal/models/medium/')))
+            self.assertLess(m['model_bytes'], m['model_unpacked_bytes'])
             self.assertEqual(len(m['model_sha256']),64)
             self.assertEqual(len(m['model_bin_sha256']),64)
 

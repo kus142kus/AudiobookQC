@@ -97,6 +97,9 @@ def prepare(app: Path = APP, staged: Path = STAGED, model_zip: Path = MODEL_ZIP)
         'url': f'https://github.com/{REPO}/releases/download/{RELEASE_TAG}/AQC-Model.zip',
         'model_zip': model_zip.name,
         'model_bytes': model_zip.stat().st_size,
+        # Inno Setup ExternalSize for extractarchive must be the UNCOMPRESSED sum,
+        # not the ZIP download size. This makes progress/disk estimates correct.
+        'model_unpacked_bytes': sum(x.stat().st_size for x in files_model),
         'model_sha256': sha256(model_zip),
         'model_bin_sha256': sha256(weights),
         'core_files': len(files_main),
@@ -126,7 +129,7 @@ def render(manifest: dict, *, staged: Path = STAGED, filename: Path = GENERATED,
         '@@APPID@@': 'AudiobookQC-CI-Installer-Test' if test else 'AudiobookQC.kus142kus',
         '@@MODEL_SOURCE@@': model_source,
         '@@MODEL_FLAGS@@': model_flags,
-        '@@MODEL_BYTES@@': str(manifest['model_bytes']),
+        '@@MODEL_BYTES@@': str(manifest['model_unpacked_bytes']),
         '@@MODEL_SHA@@': manifest['model_sha256'],
         '@@MODEL_BIN_SHA@@': manifest['model_bin_sha256'],
         '@@TEST@@': '1' if test else '0',
@@ -169,7 +172,6 @@ def compile_iss(iss: Path, *, compiler: Path | None = None) -> Path:
 
 def source_self_test() -> None:
     """A real zip round-trip using a synthetic frozen-app layout (no 2 GB models)."""
-    import unittest.mock as mock
     with tempfile.TemporaryDirectory(prefix='aqc-installer-test-') as tmp:
         root = Path(tmp)
         app = root / 'AudiobookQC'
@@ -186,24 +188,25 @@ def source_self_test() -> None:
             path = app / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
-        with mock.patch(f'{__name__}.DIST', root), mock.patch(f'{__name__}.ROOT', ROOT):
-            manifest = prepare(app, root / 'core', root / 'AQC-Model.zip')
-            assert (root / 'core/AudiobookQC.exe').read_bytes() == payload['AudiobookQC.exe']
-            assert not (root / 'core/_internal/models/medium/model.bin').exists()
-            with ZipFile(root / 'AQC-Model.zip') as z:
-                assert '_internal/models/medium/model.bin' in z.namelist()
-                dest = root / 'install'
-                shutil.copytree(root / 'core', dest)
-                z.extractall(dest)
-            for name, data in payload.items():
-                assert (root / 'install' / name).read_bytes() == data, name
-            script = render(manifest, staged=root / 'core', filename=root / 'test.iss', out_dir=root)
-            source = script.read_text(encoding='utf-8-sig')
-            assert 'download extractarchive' in source
-            assert manifest['model_sha256'] in source
-            assert manifest['url'] in source
-            assert 'AQC-Model.zip' in source
-            assert 'Hash: ' in source
+        # All paths are explicit. Patching this module by __name__ breaks when
+        # unittest loads it via importlib.util without a sys.modules entry.
+        manifest = prepare(app, root / 'core', root / 'AQC-Model.zip')
+        assert (root / 'core/AudiobookQC.exe').read_bytes() == payload['AudiobookQC.exe']
+        assert not (root / 'core/_internal/models/medium/model.bin').exists()
+        with ZipFile(root / 'AQC-Model.zip') as z:
+            assert '_internal/models/medium/model.bin' in z.namelist()
+            dest = root / 'install'
+            shutil.copytree(root / 'core', dest)
+            z.extractall(dest)
+        for name, data in payload.items():
+            assert (root / 'install' / name).read_bytes() == data, name
+        script = render(manifest, staged=root / 'core', filename=root / 'test.iss', out_dir=root)
+        source = script.read_text(encoding='utf-8-sig')
+        assert 'download extractarchive' in source
+        assert manifest['model_sha256'] in source
+        assert manifest['url'] in source
+        assert 'AQC-Model.zip' in source
+        assert 'Hash: ' in source
     print('AQC_WINDOWS_INSTALLER_SOURCE_TEST_OK', flush=True)
 
 
