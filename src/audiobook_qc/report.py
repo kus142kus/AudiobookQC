@@ -1,195 +1,379 @@
-"""Word reports modelled on the supplied 'Ключевые ошибки озвучки' example."""
+"""High-legibility, printer-friendly Word reports for audiobook editorial QC.
+
+This module presents *candidates for listening*, not proven narrator mistakes.
+Source alignment / verified filtering happens in analysis and generate_report.
+All important information remains in each part's saved JSON/CSV data.
+"""
 from __future__ import annotations
+
 from datetime import datetime
 from pathlib import Path
+import re
+
 from docx import Document
-from docx.shared import Cm, Pt, RGBColor
+from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.enum.table import WD_TABLE_ALIGNMENT, WD_CELL_VERTICAL_ALIGNMENT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.shared import Cm, Pt, RGBColor
+
 from .analysis import fmt_time, effective_severity
 
 CATEGORIES = {
-    "repeat": "Повтор / дубль", "omission": "Пропуск фрагмента",
-    "replacement": "Замена / оговорка", "extra": "Лишняя фраза",
-    "uncertain": "Проверить вручную", "profanity": "Возможная бранная реплика", "clipping": "Возможная перегрузка звука",
-    "sound_event": "Посторонний звук (предположение)", "hum": "Возможный сетевой гул", "hiss": "Шипение / фоновый шум",
-    "click": "Возможный щелчок", "level_jump": "Перепад уровня", "stress": "Подозрение на ударение",
-    "intonation": "Интонация: проверить на слух"
+    'repeat': 'Повтор / дубль', 'omission': 'Пропуск текста',
+    'replacement': 'Возможная оговорка', 'extra': 'Лишняя фраза',
+    'uncertain': 'Проверить вручную', 'profanity': 'Возможная бранная реплика',
+    'clipping': 'Возможная перегрузка', 'sound_event': 'Возможный посторонний звук',
+    'hum': 'Возможный гул', 'hiss': 'Шипение или фон',
+    'click': 'Возможный щелчок', 'level_jump': 'Перепад громкости',
+    'stress': 'Возможное ударение', 'intonation': 'Возможная интонация',
 }
-COLORS = {"navy": "173C60", "blue": "236B9F", "light": "EAF2F8", "muted": "536679"}
+C = {
+    'navy': '18314B', 'blue': '1E5B92', 'text': '1E2F3F',
+    'muted': '536577', 'rule': 'AEBECC', 'soft': 'E0E8EF',
+    'stripe': 'F3F7FA', 'white': 'FFFFFF', 'amber': 'FFF2DB',
+    'amber_text': '855116', 'green': '21644E', 'pale': 'E8F1F7',
+}
+ADVISORY_KINDS = {
+    'clipping', 'sound_event', 'hum', 'hiss', 'click',
+    'level_jump', 'stress', 'intonation',
+}
+READING_KINDS = {'replacement', 'omission', 'extra', 'repeat'}
 
 
-def cell_shading(cell, hexcolor):
-    tcPr = cell._tc.get_or_add_tcPr()
-    shd = OxmlElement("w:shd")
-    shd.set(qn("w:fill"), hexcolor)
-    tcPr.append(shd)
+def _font(run, size=10, *, bold=False, color='text'):
+    run.font.name = 'Arial'
+    run.font.size = Pt(size)
+    run.font.bold = bold
+    run.font.color.rgb = RGBColor.from_string(C.get(color, color))
+    return run
 
 
-def set_cell_text(cell, value: str, is_header=False):
-    cell.text = ""
+def _shade(cell, color):
+    tcpr = cell._tc.get_or_add_tcPr()
+    sh = tcpr.find(qn('w:shd'))
+    if sh is None:
+        sh = OxmlElement('w:shd')
+        tcpr.append(sh)
+    sh.set(qn('w:fill'), C.get(color, color))
+
+
+def _borders(table, color='rule', outer=8, inner=6):
+    """Visible grid on both screen and paper, even after editing in Word."""
+    pr = table._tbl.tblPr
+    old = pr.find(qn('w:tblBorders'))
+    if old is not None:
+        pr.remove(old)
+    b = OxmlElement('w:tblBorders')
+    for edge in ('top', 'left', 'bottom', 'right', 'insideH', 'insideV'):
+        line = OxmlElement('w:' + edge)
+        line.set(qn('w:val'), 'single')
+        line.set(qn('w:color'), C.get(color, color))
+        line.set(qn('w:sz'), str(outer if edge in ('top','left','bottom','right') else inner))
+        b.append(line)
+    pr.append(b)
+
+
+def _margins(cell, top=130, start=140, bottom=130, end=140):
+    tcpr = cell._tc.get_or_add_tcPr()
+    m = tcpr.find(qn('w:tcMar'))
+    if m is None:
+        m = OxmlElement('w:tcMar')
+        tcpr.append(m)
+    for key, val in [('top', top), ('start', start), ('bottom', bottom), ('end', end)]:
+        tag = qn('w:' + key)
+        el = m.find(tag)
+        if el is None:
+            el = OxmlElement('w:' + key)
+            m.append(el)
+        el.set(qn('w:w'), str(val))
+        el.set(qn('w:type'), 'dxa')
+
+
+def _nosplit(row):
+    trpr = row._tr.get_or_add_trPr()
+    if trpr.find(qn('w:cantSplit')) is None:
+        trpr.append(OxmlElement('w:cantSplit'))
+
+
+def _repeat_header(row):
+    trpr = row._tr.get_or_add_trPr()
+    if trpr.find(qn('w:tblHeader')) is None:
+        h = OxmlElement('w:tblHeader')
+        h.set(qn('w:val'), 'true')
+        trpr.append(h)
+
+
+def _brief(value, limit=155):
+    value = re.sub(r'\s+', ' ', str(value or '—')).strip()
+    return value if len(value) <= limit else value[:limit - 1].rstrip() + '…'
+
+
+def _p(container, text, size=9.5, *, color='text', bold=False, before=0, after=0, keep=False):
+    p = container.add_paragraph()
+    p.paragraph_format.space_before = Pt(before)
+    p.paragraph_format.space_after = Pt(after)
+    p.paragraph_format.line_spacing = 1.15
+    p.paragraph_format.keep_with_next = keep
+    _font(p.add_run(str(text)), size, bold=bold, color=color)
+    return p
+
+
+def _cell(cell, text, *, size=9.7, bold=False, color='text', bg=None):
+    cell.text = ''
+    _margins(cell)
+    if bg:
+        _shade(cell, bg)
+    cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
     p = cell.paragraphs[0]
     p.paragraph_format.space_after = Pt(0)
-    run = p.add_run(value)
-    run.font.name = "Arial"
-    run.font.size = Pt(8 if not is_header else 8.3)
-    run.font.bold = is_header
-    if is_header:
-        run.font.color.rgb = RGBColor(255, 255, 255)
-    cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+    p.paragraph_format.line_spacing = 1.14
+    _font(p.add_run(_brief(text)), size, bold=bold, color=color)
+    return p
 
 
-def _build_doc(title: str, subtitle: str, rows: list[dict], metadata: dict, advisory: list[dict] | None = None) -> Document:
+def _extra(cell, text, *, size=8.3, color='muted', before=4, bold=False):
+    p = cell.add_paragraph()
+    p.paragraph_format.space_before = Pt(before)
+    p.paragraph_format.space_after = Pt(0)
+    p.paragraph_format.line_spacing = 1.14
+    _font(p.add_run(_brief(text, 190)), size, color=color, bold=bold)
+    return p
+
+
+def _section(doc, title, number):
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(15)
+    p.paragraph_format.space_after = Pt(6)
+    p.paragraph_format.keep_with_next = True
+    _font(p.add_run(f'{number:02d}  '), 11.2, bold=True, color='blue')
+    _font(p.add_run(title), 11.2, bold=True, color='navy')
+
+
+def _editorial_variant(item):
+    a = ' '.join((item.get('spoken') or '').lower().split())
+    b = ' '.join((item.get('expected') or '').lower().split())
+    return item.get('kind') == 'replacement' and {a, b} in (
+        {'мной', 'мною'}, {'тобой', 'тобою'}, {'ей', 'ею'})
+
+
+def _status(review):
+    return {'fixed': 'Исправлено', 'false': 'Не ошибка',
+            'todo': 'Не проверено'}.get(review, 'Не проверено')
+
+
+def _action(item):
+    kind = item.get('kind')
+    if _editorial_variant(item):
+        return 'Редакционный вариант. Сверить требования к дословности.'
+    if kind == 'repeat':
+        return 'Возможный повтор. Прослушать начало и конец фрагмента.'
+    if kind == 'omission':
+        return 'Возможный пропуск. Проверить соседние предложения.'
+    if kind == 'extra':
+        return 'Лишние слова? Прослушать вместе с контекстом.'
+    if kind == 'profanity':
+        return 'Возможная реплика вне текста. Проверить на слух.'
+    return 'Сравнить с рукописью и прослушать фрагмент.'
+
+
+def _event_explanation(item):
+    text = re.sub(r'\s+', ' ', (item.get('reason') or '').strip())
+    if not text:
+        text = 'Прослушать участок и проверить, присутствует ли дефект.'
+    return _brief(text, 170)
+
+
+def _new_table(doc, headers, widths):
+    t = doc.add_table(rows=1, cols=len(headers))
+    t.style = 'Table Grid'
+    t.autofit = False
+    t.alignment = WD_TABLE_ALIGNMENT.CENTER
+    for col, w in zip(t.columns, widths):
+        col.width = Cm(w)
+    _borders(t)
+    head = t.rows[0]
+    _repeat_header(head)
+    _nosplit(head)
+    for i, (txt, width) in enumerate(zip(headers, widths)):
+        c = head.cells[i]
+        c.width = Cm(width)
+        _cell(c, txt, size=8.6, color='white', bold=True, bg='navy')
+    return t
+
+
+def _append_reading(table, item, no):
+    row = table.add_row()
+    _nosplit(row)
+    widths = (2.2, 4.4, 4.4, 6.3)
+    tint = 'white' if no % 2 else 'stripe'
+    for cell, width in zip(row.cells, widths):
+        cell.width = Cm(width)
+        _shade(cell, tint)
+    _cell(row.cells[0], f'{no:02d}  /  {fmt_time(item.get("start", 0))}',
+          size=9.1, bold=True, color='blue')
+    _cell(row.cells[1], item.get('expected') or '—', size=10, bold=True)
+    _cell(row.cells[2], item.get('spoken') or '—', size=10, bold=True)
+    _cell(row.cells[3], CATEGORIES.get(item.get('kind'), 'Расхождение'),
+          size=9.3, bold=True, color='navy')
+    _extra(row.cells[3], _action(item), size=8.5)
+    if item.get('review') in (None, 'todo'):
+        _extra(row.cells[3], '□ Исправить    □ Не ошибка    □ Позже', size=8.2, before=6)
+    else:
+        _extra(row.cells[3], 'Отметка: ' + _status(item.get('review')),
+               size=8.6, color='green', bold=True, before=6)
+
+
+def _append_advisory(table, item, no):
+    row = table.add_row()
+    _nosplit(row)
+    widths = (2.2, 4.5, 10.6)
+    tint = 'white' if no % 2 else 'stripe'
+    for cell, width in zip(row.cells, widths):
+        cell.width = Cm(width)
+        _shade(cell, tint)
+    _cell(row.cells[0], f'{no:02d}  /  {fmt_time(item.get("start",0))}',
+          size=9.1, bold=True, color='blue')
+    _cell(row.cells[1], CATEGORIES.get(item.get('kind'), 'Проверить звук'),
+          size=9.6, bold=True)
+    _cell(row.cells[2], _event_explanation(item), size=8.8)
+    _extra(row.cells[2], 'Не подтверждено — прослушать.', size=8.2,
+           color='amber_text', bold=True, before=4)
+
+
+def _build_doc(title: str, subtitle: str, rows: list[dict], metadata: dict,
+               advisory: list[dict] | None = None) -> Document:
     d = Document()
     sec = d.sections[0]
-    sec.page_height, sec.page_width = Cm(29.7), Cm(21.0)
-    sec.left_margin = Cm(1.6)
-    sec.right_margin = Cm(1.6)
-    sec.top_margin = Cm(1.8)
-    sec.bottom_margin = Cm(1.5)
-    normal = d.styles["Normal"]
-    normal.font.name = "Arial"
-    normal.font.size = Pt(9)
-    normal.font.color.rgb = RGBColor.from_string(COLORS["navy"])
-    normal.paragraph_format.space_after = Pt(5)
-    p = d.add_paragraph()
-    p.paragraph_format.space_after = Pt(3)
-    r = p.add_run(title)
-    r.bold = True
-    r.font.size = Pt(17)
-    r.font.color.rgb = RGBColor.from_string(COLORS["navy"])
-    p = d.add_paragraph(subtitle)
-    p.style = normal
-    summary = d.add_table(rows=1, cols=1)
-    summary.autofit = False
-    cell = summary.cell(0,0)
-    cell_shading(cell, COLORS["light"])
-    cell.text = f"Файл: {metadata['audio_name']}    |    Текст: {metadata['text_name']}\n" + (
-        f"Диапазон: {metadata['range']}    |    Отобрано кандидатов: {len(rows)} из {metadata['total']}\n"
-        f"Возможные повторы: {sum(r['kind']=='repeat' for r in rows)}    |    "
-        f"Отмечены как ложные: {sum(r.get('review')=='false' for r in rows)}"
-    )
-    if metadata.get('dual_mode') and metadata.get('not_rechecked'):
-        cell.text += (f"\nНе проверены второй моделью: {metadata['not_rechecked']}. "
-                      "Они сохранены в полном журнале, а не удалены.")
-    for p in cell.paragraphs:
-        p.paragraph_format.space_after = Pt(1)
-        for r in p.runs:
-            r.font.size = Pt(9)
-    d.add_paragraph()
-    def issue_table(items: list[dict]):
-        tbl = d.add_table(rows=1, cols=4)
-        tbl.style = "Table Grid"
-        tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
-        tbl.autofit = False
-        widths = [Cm(2.0), Cm(5.2), Cm(5.2), Cm(5.2)]
-        for i,(head,width) in enumerate(zip(["Таймкод", "Произнесено", "По тексту", "Причина / действие"], widths)):
-            tbl.columns[i].width = width
-            set_cell_text(tbl.cell(0,i), head, True)
-            cell_shading(tbl.cell(0,i), COLORS["blue"])
-        trPr = tbl.rows[0]._tr.get_or_add_trPr()
-        repeating = OxmlElement("w:tblHeader")
-        repeating.set(qn("w:val"), "true")
-        trPr.append(repeating)
-        if not items:
-            empty = tbl.add_row().cells
-            for i in range(4): empty[i].width = widths[i]
-            for c, val in zip(empty,["—", "Серьёзных расхождений пока не найдено", "—", "Это не гарантия отсутствия ошибок"]):
-                set_cell_text(c,val)
-        for idx, issue in enumerate(items):
-            cells = tbl.add_row().cells
-            for i in range(4): cells[i].width = widths[i]
-            timestamp = fmt_time(issue["start"])
-            if issue["end"] > issue["start"] + 3:
-                timestamp += "\n– " + fmt_time(issue["end"])
-            status = {"fixed": "Исправлено", "false": "Отклонено", "todo": "Не проверено"}.get(issue.get("review"), "Не проверено")
-            fields = [timestamp, issue.get("spoken", ""), issue.get("expected", ""),
-                      f"{CATEGORIES.get(issue['kind'], issue['kind'])}\n{issue.get('reason','')}\nСтатус: {status}"]
-            for i, content in enumerate(fields):
-                set_cell_text(cells[i], content)
-                if idx % 2:
-                    cell_shading(cells[i], "F3F7FA")
-        return tbl
+    sec.page_height, sec.page_width = Cm(29.7), Cm(21)
+    sec.left_margin = sec.right_margin = Cm(1.85)
+    sec.top_margin, sec.bottom_margin = Cm(1.75), Cm(1.65)
+    sec.header_distance, sec.footer_distance = Cm(.8), Cm(.85)
+
+    normal = d.styles['Normal']
+    normal.font.name = 'Arial'
+    normal.font.size = Pt(9.5)
+    normal.font.color.rgb = RGBColor.from_string(C['text'])
+    normal.paragraph_format.space_after = Pt(0)
+
+    head = sec.header.paragraphs[0]
+    head.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    _font(head.add_run('AUDIOBOOK QC  ·  ПРОВЕРКА ОЗВУЧКИ'), 7.8,
+          bold=True, color='muted')
+    _p(d, title, 18, color='navy', bold=True, after=2)
+    _p(d, subtitle, 10.1, color='blue', bold=True, after=11)
+
+    # Clear, bordered metadata block: no cramped inline labels.
+    meta = _new_table(d, ('АУДИО', 'РУКОПИСЬ', 'ДИАПАЗОН'), (5.7, 5.7, 5.9))
+    mrow = meta.add_row()
+    _nosplit(mrow)
+    for c, w in zip(mrow.cells, (5.7, 5.7, 5.9)):
+        c.width = Cm(w)
+    _cell(mrow.cells[0], metadata.get('audio_name', '—'), size=9, bold=True, bg='stripe')
+    _cell(mrow.cells[1], metadata.get('text_name', '—'), size=9, bold=True, bg='stripe')
+    _cell(mrow.cells[2], metadata.get('range', ''), size=9, bold=True, bg='stripe')
+    _extra(mrow.cells[2], f'Отобрано кандидатов: {len(rows)}', size=8.2, before=4)
 
     advisory = advisory or []
-    repeating_issues = [r for r in rows if r["kind"] == "repeat"]
-    audio_issues = [r for r in rows if r["kind"] == "clipping"]
-    profanity_issues = [r for r in rows if r["kind"] == "profanity"]
-    text_issues = [r for r in rows if r["kind"] not in ("repeat", "clipping", "profanity")]
-    sections = [("1. ПОВТОРЫ И ДУБЛИ", repeating_issues),
-                ("2. ОШИБКИ ЧТЕНИЯ И ПРОПУСКИ", text_issues)]
-    if audio_issues:
-        sections.append(("3. ТЕХНИЧЕСКИЕ ЗАМЕЧАНИЯ", audio_issues))
-    if profanity_issues:
-        sections.append(("4. ВОЗМОЖНЫЕ БРАННЫЕ РЕПЛИКИ", profanity_issues))
-    for heading, items in sections:
-        h = d.add_paragraph()
-        h.paragraph_format.space_before = Pt(10)
-        r = h.add_run(heading)
-        r.font.bold = True
-        r.font.color.rgb = RGBColor.from_string(COLORS["blue"])
-        r.font.size = Pt(11)
-        issue_table(items)
+    rows = [x for x in rows if x.get('kind') not in ADVISORY_KINDS]
+    primary = [x for x in rows if not _editorial_variant(x)]
+    editorial = [x for x in rows if _editorial_variant(x)]
+    _p(d, f'Основные находки: {len(primary)}   |   Редакционные варианты: {len(editorial)}   |   Звук и произношение: {len(advisory)}',
+       size=9.1, color='navy', bold=True, before=8, after=5)
+    _p(d, f'Всего автоматических кандидатов: {metadata.get("total", len(rows))}. '
+       'Все замечания требуют проверки на слух.',
+       size=8.4, color='muted', after=3)
+    if metadata.get('dual_mode') and metadata.get('not_rechecked'):
+        _p(d, f'Не прошли вторую речевую модель: {metadata["not_rechecked"]}. '
+           'Они сохранены в полном журнале, не удалены.',
+           size=8.3, color='amber_text', after=3)
+
+    section_no = 1
+    _section(d, 'Ошибки чтения, пропуски и повторы', section_no)
+    if primary:
+        table = _new_table(d,
+            ('№ / ВРЕМЯ', 'ПО РУКОПИСИ', 'РАСПОЗНАНО', 'ТИП / ЧТО СДЕЛАТЬ'),
+            (2.2, 4.4, 4.4, 6.3))
+        for i, item in enumerate(primary, 1):
+            _append_reading(table, item, i)
+    else:
+        _p(d, 'ПОВТОРЫ И ДУБЛИ: серьёзных кандидатов нет. Это не гарантирует отсутствия ошибок.',
+           size=9.4, color='muted', before=3, after=4)
+
+    if editorial:
+        section_no += 1
+        _section(d, 'Небольшие редакционные отличия', section_no)
+        _p(d, 'Разные формы слов могут звучать естественно; проверяйте только при требовании дословности.',
+           size=8.5, color='muted', after=5)
+        table = _new_table(d,
+            ('№ / ВРЕМЯ', 'ПО РУКОПИСИ', 'РАСПОЗНАНО', 'ТИП / ЧТО СДЕЛАТЬ'),
+            (2.2, 4.4, 4.4, 6.3))
+        for i, item in enumerate(editorial, 1):
+            _append_reading(table, item, i)
+
     if advisory:
-        h=d.add_paragraph()
-        h.add_run('5. ЗВУК, УДАРЕНИЯ И ИНТОНАЦИЯ — ТОЛЬКО ДЛЯ ПРОСЛУШИВАНИЯ').bold=True
-        d.add_paragraph('Эти предположения не подтверждены человеком и не являются установленным браком. Некоторые, особенно ударения и интонация, основаны лишь на приближённых акустических признаках.')
-        issue_table(advisory[:35])
-        if len(advisory)>35:
-            d.add_paragraph(f'Ещё {len(advisory)-35} подозрительных звуковых событий сохранены в расширенном журнале проекта.')
-    if metadata.get("uncertain", 0):
-        p = d.add_paragraph()
-        p.paragraph_format.space_before = Pt(9)
-        p.add_run(f"Внимание: {metadata['uncertain']} участок(ов) не удалось надёжно сопоставить с рукописью. ").bold=True
-        p.add_run("Они не включены в краткий список подтверждённых кандидатов. Проверьте эти места в приложении.")
-    note = d.add_paragraph()
-    note.paragraph_format.space_before = Pt(8)
-    note.add_run("Важно: ").bold = True
-    note.add_run("это автоматические предположения на основе распознавания речи. "
-                 "Все значимые находки нужно прослушать. Звуковая модель и акустический анализ "
-                 "не гарантируют обнаружения всех помех. Ударения и интонация проверяются только экспериментально.")
-    note.runs[-1].font.size = Pt(8)
-    footer = sec.footer.paragraphs[0]
-    footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    footer.add_run(f"Audiobook QC · Локальный анализ · {datetime.now():%d.%m.%Y}").font.size = Pt(8)
+        section_no += 1
+        _section(d, 'ЗВУК, УДАРЕНИЯ И ИНТОНАЦИЯ — ТОЛЬКО ДЛЯ ПРОСЛУШИВАНИЯ', section_no)
+        _p(d, 'События ниже не являются установленным браком: это предположения алгоритмов.',
+           size=8.6, color='amber_text', after=6)
+        table = _new_table(d,
+            ('№ / ВРЕМЯ', 'ВОЗМОЖНОЕ СОБЫТИЕ', 'ОБЪЯСНЕНИЕ / ДЕЙСТВИЕ'),
+            (2.2, 4.5, 10.6))
+        for i, item in enumerate(advisory[:35], 1):
+            _append_advisory(table, item, i)
+        if len(advisory) > 35:
+            _p(d, f'Остальные {len(advisory)-35} предположений доступны в полном журнале.',
+               size=8.5, color='muted', before=4)
+
+    if metadata.get('uncertain'):
+        _p(d, f'Не удалось надёжно сопоставить с рукописью: {metadata["uncertain"]} участков. '
+           'Проверьте полный журнал.', size=8.4, color='amber_text', before=9)
+    _p(d, 'Порядок работы: откройте таймкод в приложении → прослушайте контекст → '
+       'отметьте «Исправить» или «Не ошибка».', size=8.2, color='muted', before=12)
+    foot = sec.footer.paragraphs[0]
+    foot.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    _font(foot.add_run('Audiobook QC  ·  '+datetime.now().strftime('%d.%m.%Y')+'  ·  Стр. '),
+          7.6, color='muted')
+    field = OxmlElement('w:fldSimple')
+    field.set(qn('w:instr'), 'PAGE')
+    foot._p.append(field)
     return d
 
 
-def generate_report(path: Path, project: dict, issues: list[dict], start: float, end: float, final: bool=False, reviews: dict | None = None):
+def generate_report(path: Path, project: dict, issues: list[dict], start: float, end: float,
+                    final: bool = False, reviews: dict | None = None):
     reviews = reviews or {}
     rows = []
-    for item in sorted(issues, key=lambda x: x["start"]):
-        if effective_severity(item) != "high":
+    for item in sorted(issues, key=lambda x: x['start']):
+        if item.get('kind') in ADVISORY_KINDS or effective_severity(item) != 'high':
             continue
         if (project.get('report_policy') in ('second-pass', 'dual-gigaam')
-                and item.get('kind') in ('replacement', 'omission', 'extra', 'repeat')
-                and not item.get('rechecked')):
-            continue  # Unverified initial ASR hypothesis remains only in the full log.
+                and item.get('kind') in READING_KINDS and not item.get('rechecked')):
+            continue
         if (project.get('report_policy') == 'dual-gigaam'
-                and item.get('kind') in ('replacement', 'omission', 'extra', 'repeat')
-                and not item.get('dual_confirmed')):
-            continue  # Do not call a single-ASR hypothesis a serious finding.
+                and item.get('kind') in READING_KINDS and not item.get('dual_confirmed')):
+            continue
         row = item.copy()
-        row["review"] = reviews.get(item["id"], "todo")
+        row['review'] = reviews.get(item['id'], 'todo')
         rows.append(row)
-    advice_kinds={'sound_event','hum','hiss','click','level_jump','stress','intonation'}
-    advisory=[]
-    for item in sorted(issues,key=lambda x:x['start']):
-        if item.get('kind') in advice_kinds and reviews.get(item.get('id')) != 'false':
-            row=item.copy();row['review']=reviews.get(item['id'],'todo');advisory.append(row)
+
+    advisory = []
+    for item in sorted(issues, key=lambda x: x['start']):
+        if item.get('kind') in ADVISORY_KINDS and reviews.get(item.get('id')) != 'false':
+            row = item.copy()
+            row['review'] = reviews.get(item.get('id'), 'todo')
+            advisory.append(row)
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    label = "ВЕСЬ АУДИОФАЙЛ" if final else f"ЧАСТЬ · {fmt_time(start)}–{fmt_time(end)}"
-    d = _build_doc("ПОДОЗРИТЕЛЬНЫЕ МЕСТА ДЛЯ ПРОВЕРКИ", label,
-                   rows, {"audio_name":project["audio_name"], "text_name":project["text_name"],
-                          "range": f"{fmt_time(start)}–{fmt_time(end)}",
-                          "total":len(issues),
-                          "dual_mode":project.get('report_policy') == 'dual-gigaam',
-                          "not_rechecked":sum(i.get('kind') in ('replacement','omission','extra','repeat')
-                                                and not i.get('dual_checked') for i in issues),
-                          "uncertain":sum(i["kind"] == "uncertain" for i in issues)}, advisory=advisory)
-    # Atomic replacement so a download never sees a half-written DOCX.
-    tmp = path.with_suffix(".pending.docx")
-    d.save(str(tmp))
+    label = 'Вся запись' if final else f'Часть · {fmt_time(start)}–{fmt_time(end)}'
+    doc = _build_doc('Проверка озвучки', label, rows, {
+        'audio_name': project['audio_name'], 'text_name': project['text_name'],
+        'range': f'{fmt_time(start)}–{fmt_time(end)}',
+        'total': len(issues),
+        'dual_mode': project.get('report_policy') == 'dual-gigaam',
+        'not_rechecked': sum(i.get('kind') in READING_KINDS and not i.get('dual_checked') for i in issues),
+        'uncertain': sum(i.get('kind') == 'uncertain' for i in issues),
+    }, advisory=advisory)
+    tmp = path.with_suffix('.pending.docx')
+    doc.save(str(tmp))
     tmp.replace(path)

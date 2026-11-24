@@ -247,13 +247,13 @@ class Bridge:
 
 
 def preferred_gui_backend(platform: str | None = None) -> str | None:
-    """Use bundled Qt WebEngine on Windows, avoiding pythonnet/WinForms entirely.
+    """Use bundled Qt WebEngine on Windows/Linux, avoiding pythonnet/WinForms entirely.
 
     The former Windows WinForms renderer required Python.Runtime.dll and could
     pass CI while failing on a user's PC. macOS keeps its built-in WKWebView.
     """
     platform = sys.platform if platform is None else platform
-    return "qt" if platform == "win32" else None
+    return "qt" if platform in ("win32", "linux") else None
 
 
 def verify_gui_backend() -> str:

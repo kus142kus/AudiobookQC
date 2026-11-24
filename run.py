@@ -1,4 +1,4 @@
-"""Audiobook QC v0.6 — native offline Windows / macOS application."""
+"""Audiobook QC desktop — native offline Windows / macOS application."""
 from __future__ import annotations
 import argparse
 import sys

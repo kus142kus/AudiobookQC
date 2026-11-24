@@ -36,7 +36,7 @@ class NativeGuiBackendTests(unittest.TestCase):
     def test_native_windows_uses_qt_not_dotnet(self):
         self.assertEqual(desktop_web.preferred_gui_backend('win32'), 'qt')
         self.assertIsNone(desktop_web.preferred_gui_backend('darwin'))
-        self.assertIsNone(desktop_web.preferred_gui_backend('linux'))
+        self.assertEqual(desktop_web.preferred_gui_backend('linux'), 'qt')
 
     def test_qt_integrity_probe_needs_local_webengine(self):
         qt_core = types.ModuleType('PySide6.QtCore'); qt_core.QLibraryInfo = object()

@@ -23,5 +23,5 @@ onnxruntime>=1.19,<2.0
 # Use Qt WebEngine only on Windows. The old WinForms/pythonnet backend caused
 # a real end-user startup crash in the frozen Windows executable.
 # On macOS keep WKWebView; no additional Qt dependency is installed there.
-QtPy==2.4.3; sys_platform == "win32"
-PySide6==6.10.1; sys_platform == "win32"
+QtPy==2.4.3; sys_platform == "win32" or sys_platform == "linux"
+PySide6==6.10.1; sys_platform == "win32" or sys_platform == "linux"
