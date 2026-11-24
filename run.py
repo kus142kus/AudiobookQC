@@ -2,6 +2,7 @@
 from __future__ import annotations
 import argparse
 import sys
+import traceback
 from pathlib import Path
 
 if not getattr(sys, "frozen", False):
@@ -21,13 +22,39 @@ def _stage(message: str) -> None:
 
 
 def _silent_wav(path: Path) -> None:
-    """A tiny deterministic PCM WAV for checking inference without user audio."""
+    """A tiny deterministic PCM WAV for checking speech inference."""
     import wave
     with wave.open(str(path), "wb") as wav:
         wav.setnchannels(1)
         wav.setsampwidth(2)
         wav.setframerate(16000)
         wav.writeframes(b"\x00\x00" * 16000)
+
+
+def _audible_test_wav(path: Path, seconds: int = 3) -> None:
+    """A bounded audible synthetic tone that the sound detector cannot skip.
+
+    Do not use silence here: AudioEventDetector.inspect intentionally skips
+    very quiet audio. The CI smoke test must run ONNX inference for real.
+    """
+    import math
+    import wave
+    from array import array
+
+    sample_rate = 16000
+    samples = array("h", (
+        int(2200 * math.sin(2 * math.pi * 440 * i / sample_rate))
+        for i in range(sample_rate * seconds)
+    ))
+    # PCM WAV must always be little-endian.
+    import sys as _sys
+    if _sys.byteorder != "little":
+        samples.byteswap()
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(samples.tobytes())
 
 
 def self_test() -> None:
@@ -77,11 +104,22 @@ def single_model_test(which: str) -> None:
             _stage("Loading YAMNet event detector")
             from audiobook_qc.events import AudioEventDetector
             detector = AudioEventDetector()
-            _stage("Running YAMNet 3-second inference")
-            with wave.open(str(wav),"wb") as f:
-                f.setnchannels(1); f.setsampwidth(2); f.setframerate(16000)
-                f.writeframes(b"\x00\x00"*16000*3)
-            assert isinstance(detector.inspect(wav,0,0,3),list)
+            _stage("Preparing non-silent 3-second YAMNet test waveform")
+            _audible_test_wav(wav, seconds=3)
+            class _CountingSession:
+                def __init__(self, wrapped):
+                    self.wrapped = wrapped
+                    self.calls = 0
+                def run(self, *args, **kwargs):
+                    self.calls += 1
+                    return self.wrapped.run(*args, **kwargs)
+            counter = _CountingSession(detector.session)
+            detector.session = counter
+            _stage("Running YAMNet 3-second REAL inference")
+            issues = detector.inspect(wav, 0, 0, 3)
+            if not isinstance(issues, list) or counter.calls < 1:
+                raise RuntimeError("YAMNet smoke test did not execute any ONNX inference")
+            _stage(f"YAMNet ONNX inference calls: {counter.calls}")
         elif which == "gigaam":
             import faulthandler
             import os
@@ -108,43 +146,58 @@ def single_model_test(which: str) -> None:
     _stage(f"AUDIOBOOK_QC_{which.upper()}_INFERENCE_OK")
 
 
-if __name__ == "__main__":
-    parser=argparse.ArgumentParser()
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser()
     parser.add_argument('--self-test', action='store_true')
     parser.add_argument('--smoke-gui', action='store_true')
     parser.add_argument('--test-whisper', action='store_true')
     parser.add_argument('--test-gigaam', action='store_true')
     parser.add_argument('--test-events', action='store_true')
-    args=parser.parse_args()
-    if args.self_test:
-        self_test()
-    elif args.test_whisper:
-        single_model_test("whisper")
-    elif args.test_gigaam:
-        single_model_test("gigaam")
-    elif args.test_events:
-        single_model_test("events")
-    elif args.smoke_gui:
-        from audiobook_qc.desktop_web import app_window
-        app_window(smoke=True)
-    else:
-        try:
+    args = parser.parse_args(argv)
+    # Catch smoke-test exceptions before the windowed PyInstaller bootloader
+    # can open an invisible/modal error dialog and make GitHub Actions hang.
+    try:
+        if args.self_test:
+            self_test()
+        elif args.test_whisper:
+            single_model_test("whisper")
+        elif args.test_gigaam:
+            single_model_test("gigaam")
+        elif args.test_events:
+            single_model_test("events")
+        elif args.smoke_gui:
             from audiobook_qc.desktop_web import app_window
-            app_window()
-        except Exception:
-            import traceback
-            import datetime
-            from audiobook_qc import worker
-            path=worker.ROOT/'crash.log'
-            path.parent.mkdir(parents=True,exist_ok=True)
-            path.write_text(f"{datetime.datetime.now().isoformat()}\n{traceback.format_exc()}",encoding='utf-8')
+            app_window(smoke=True)
+        else:
             try:
-                import tkinter as tk
-                from tkinter import messagebox
-                dialog=tk.Tk(); dialog.withdraw()
-                messagebox.showerror('Audiobook QC: ошибка запуска',
-                                     f'Не удалось открыть приложение. Диагностика сохранена в {path}')
-                dialog.destroy()
+                from audiobook_qc.desktop_web import app_window
+                app_window()
             except Exception:
-                pass
-            raise
+                import datetime
+                from audiobook_qc import worker
+                path = worker.ROOT / 'crash.log'
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(f"{datetime.datetime.now().isoformat()}\n{traceback.format_exc()}", encoding='utf-8')
+                try:
+                    import tkinter as tk
+                    from tkinter import messagebox
+                    dialog = tk.Tk(); dialog.withdraw()
+                    messagebox.showerror('Audiobook QC: ошибка запуска',
+                                         f'Не удалось открыть приложение. Диагностика сохранена в {path}')
+                    dialog.destroy()
+                except Exception:
+                    pass
+                raise
+        return 0
+    except Exception:
+        # --windowed sets sys.stderr to None on Windows. Always write the
+        # details to the smoke log, return code 1, and never open any dialog.
+        if args.self_test or args.test_whisper or args.test_gigaam or args.test_events or args.smoke_gui:
+            _stage("AUDIOBOOK_QC_SMOKE_TEST_FAILED")
+            _stage(traceback.format_exc())
+            return 1
+        raise
+
+
+if __name__ == "__main__":
+    sys.exit(main())
