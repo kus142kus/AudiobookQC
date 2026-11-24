@@ -1,4 +1,4 @@
-name: Audiobook QC 0.9 - readable reports and offline builds
+name: Audiobook QC 0.9 - offline release assets
 
 on:
   workflow_dispatch:
@@ -90,6 +90,127 @@ jobs:
           assert verify_gui_backend() == 'qt'
           print('AUDIOBOOK_QC_WINDOWS_QT_WEBENGINE_OK', flush=True)
           PYCODE
+      - name: Prepare and self-test Windows ZIP packager BEFORE downloading models
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cat > aqc_pack_windows.py <<'PYCODE'
+          from __future__ import annotations
+          import hashlib
+          import sys
+          import tempfile
+          from pathlib import Path
+          from zipfile import ZipFile, ZIP_DEFLATED
+
+          LIMIT = 2 * 1024 ** 3
+          ROOT = Path('dist/AudiobookQC')
+          OUT = Path('dist')
+          CORE = OUT / 'AudiobookQC-Win.zip'
+          WHISPER = OUT / 'AudiobookQC-Model.zip'
+
+
+          def run(root=ROOT, core=CORE, model=WHISPER, limit=LIMIT):
+              root = Path(root)
+              core = Path(core)
+              model = Path(model)
+              if not (root / 'AudiobookQC.exe').is_file():
+                  raise RuntimeError('Windows EXE missing from frozen distribution')
+              if not root.is_dir():
+                  raise RuntimeError('PyInstaller distribution missing')
+
+              all_files = sorted(f for f in root.rglob('*') if f.is_file())
+              files_main, files_model = [], []
+              for f in all_files:
+                  rel_parts = f.relative_to(root).parts
+                  # PyInstaller --onedir stores data under _internal/models/medium/.
+                  for pos, part in enumerate(rel_parts):
+                      if (part == 'models' and len(rel_parts) > pos + 2
+                              and rel_parts[pos + 1] == 'medium'):
+                          files_model.append(f)
+                          break
+                  else:
+                      files_main.append(f)
+
+              if not any(f.name == 'model.bin' for f in files_model):
+                  raise RuntimeError('Whisper model.bin not found in packaged models/medium')
+              if not any('gigaam' in f.parts for f in files_main):
+                  raise RuntimeError('GigaAM absent from Windows core package')
+              if not any('yamnet' in str(f).lower() for f in files_main):
+                  raise RuntimeError('YAMNet absent from Windows core package')
+
+              install_note = (
+                  'AUDiOBOOK QC — WINDOWS (офлайн)\n\n'
+                  'НУЖНЫ ОБА АРХИВА: AudiobookQC-Win.zip и AudiobookQC-Model.zip.\n'
+                  'В Проводнике Windows для каждого ZIP нажмите «Извлечь все»,\n'
+                  'укажите ОДНУ И ТУ ЖЕ папку назначения, например C:\\AQC-install.\n'
+                  'После объединения файлов запустите AudiobookQC\\AudiobookQC.exe.\n'
+                  'Python и интернет для запуска не требуются.\n'
+              )
+              for target, files in ((core, files_main), (model, files_model)):
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  target.unlink(missing_ok=True)
+                  with ZipFile(target, mode='w', compression=ZIP_DEFLATED, compresslevel=6, allowZip64=True) as output:
+                      for f in files:
+                          archive_name = f.relative_to(root.parent).as_posix()
+                          output.write(f, archive_name)
+                      output.writestr('INSTALL.txt', install_note.encode('utf-8-sig'))
+                  if target.stat().st_size >= limit:
+                      raise RuntimeError(f'{target.name} too large for GitHub Release: {target.stat().st_size / 1024 ** 3:.2f} GiB')
+                  with ZipFile(target) as zipped:
+                      names = set(zipped.namelist())
+                      expected = {f.relative_to(root.parent).as_posix() for f in files}
+                      expected.add('INSTALL.txt')
+                      if names != expected:
+                          raise RuntimeError(f'ZIP entry mismatch in {target.name}')
+                      corrupt = zipped.testzip()
+                      if corrupt is not None:
+                          raise RuntimeError(f'ZIP corruption in {target.name}: {corrupt}')
+                  with target.open('rb') as src:
+                      sha = hashlib.file_digest(src, 'sha256').hexdigest()
+                  (target.parent / (target.name + '.sha256')).write_text(f'{sha}  {target.name}\n', encoding='ascii')
+                  print(f'RELEASE_ASSET_OK {target.name}: {target.stat().st_size / 1024**3:.2f} GiB, {len(files)} files', flush=True)
+              print('AUDIOBOOK_QC_WINDOWS_TWO_ARCHIVES_RECONSTRUCT_FULL_PACKAGE', flush=True)
+              return core, model
+
+
+          def self_test():
+              """Run a real extract-and-compare test WITHOUT downloading speech models."""
+              with tempfile.TemporaryDirectory(prefix='aqc-release-test-') as tmp:
+                  folder = Path(tmp)
+                  root = folder / 'dist' / 'AudiobookQC'
+                  samples = {
+                      'AudiobookQC.exe': b'MZtest',
+                      '_internal/models/medium/model.bin': b'whisper' * 900,
+                      '_internal/models/medium/config.json': b'{}',
+                      '_internal/models/gigaam/pytorch_model.bin': b'gigaam' * 700,
+                      '_internal/models/events/yamnet.onnx': b'yamnet' * 300,
+                      '_internal/web/index.html': b'index',
+                  }
+                  for name, payload in samples.items():
+                      target = root / name
+                      target.parent.mkdir(parents=True, exist_ok=True)
+                      target.write_bytes(payload)
+                  app_zip, model_zip = run(root, folder/'app.zip', folder/'model.zip')
+                  dest = folder / 'installed'
+                  for archive in (app_zip, model_zip):
+                      with ZipFile(archive) as z:
+                          z.extractall(dest)
+                  for name, payload in samples.items():
+                      actual = (dest/'AudiobookQC'/name).read_bytes()
+                      if actual != payload:
+                          raise RuntimeError('Release reconstruction failed: ' + name)
+                  if not (dest/'INSTALL.txt').is_file():
+                      raise RuntimeError('Release install instructions missing')
+              print('AUDIOBOOK_QC_RELEASE_PACKAGING_SELF_TEST_OK', flush=True)
+
+
+          if __name__ == '__main__':
+              if '--self-test' in sys.argv:
+                  self_test()
+              else:
+                  run()
+          PYCODE
+          python aqc_pack_windows.py --self-test
       - name: Download and checksum BOTH models on BUILD MACHINE ONLY
         shell: bash
         run: python scripts/get_offline_model.py
@@ -212,11 +333,10 @@ jobs:
         shell: bash
         run: |
           python scripts/check_bundle.py "${{ runner.os == 'Windows' && 'dist/AudiobookQC/AudiobookQC.exe' || 'dist/AudiobookQC.app/Contents/MacOS/AudiobookQC' }}"
-      - name: ZIP Windows distribution
+      - name: Package Windows into TWO standard ZIP files below GitHub Release 2 GiB limit
         if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          Compress-Archive -Path dist/AudiobookQC -DestinationPath dist/AudiobookQC-Windows.zip -Force
+        shell: bash
+        run: python aqc_pack_windows.py
       - name: Verify every native macOS library targets Apple Silicon
         if: runner.os == 'macOS'
         shell: bash
@@ -236,17 +356,40 @@ jobs:
         shell: bash
         run: |
           if [ "${{ runner.os }}" = "Windows" ]; then
-            python scripts/check_release_assets.py dist/AudiobookQC-Windows.zip
+            python scripts/check_release_assets.py dist/AudiobookQC-Win.zip
+            # The packaging script already verifies the Whisper ZIP's size,
+            # file list, CRC integrity, and SHA256 before uploading the assets.
+            test -s dist/AudiobookQC-Model.zip.sha256
           else
             python scripts/check_release_assets.py dist/AudiobookQC-Mac.dmg
           fi
-      - name: Upload tested package
+      - name: Upload Windows app (part 1 of 2)
+        if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: AudiobookQC-${{ matrix.target }}
+          name: AQC-Win
           path: |
-            dist/AudiobookQC-Windows.zip
+            dist/AudiobookQC-Win.zip
+            dist/AudiobookQC-Win.zip.sha256
+          if-no-files-found: error
+          retention-days: 15
+      - name: Upload Windows offline model (part 2 of 2)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: AQC-Model
+          path: |
+            dist/AudiobookQC-Model.zip
+            dist/AudiobookQC-Model.zip.sha256
+          if-no-files-found: error
+          retention-days: 15
+      - name: Upload Mac Apple Silicon DMG
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: AQC-Mac-M4
+          path: |
             dist/AudiobookQC-Mac.dmg
-            dist/*.sha256
+            dist/AudiobookQC-Mac.dmg.sha256
           if-no-files-found: error
           retention-days: 15
