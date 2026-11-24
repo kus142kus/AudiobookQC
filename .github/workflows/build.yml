@@ -248,26 +248,14 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: python scripts/macos_bundle_audit.py dist/AudiobookQC.app
-      - name: DMG Apple Silicon app with Applications shortcut
+      - name: Create fresh Mac DMG with staging, free-space and UDIF footer checks
         if: runner.os == 'macOS'
         shell: bash
-        run: |
-          mkdir -p dist/dmg-root
-          mv dist/AudiobookQC.app dist/dmg-root/AudiobookQC.app
-          ln -s /Applications dist/dmg-root/Applications
-          hdiutil create -volname 'Audiobook QC Offline' \
-            -srcfolder dist/dmg-root -ov -format UDZO \
-            dist/AudiobookQC-Mac.dmg
-      - name: Verify DMG and drag-to-Applications layout (macOS)
+        run: python scripts/macos_dmg.py --package
+      - name: Verify native DMG CRC and actual mounted app with bounded EAGAIN retries
         if: runner.os == 'macOS'
         shell: bash
-        run: |
-          hdiutil verify dist/AudiobookQC-Mac.dmg
-          mkdir -p "$RUNNER_TEMP/aqc-mount"
-          hdiutil attach -readonly -nobrowse -mountpoint "$RUNNER_TEMP/aqc-mount" dist/AudiobookQC-Mac.dmg
-          trap 'hdiutil detach "$RUNNER_TEMP/aqc-mount" || true' EXIT
-          test -d "$RUNNER_TEMP/aqc-mount/AudiobookQC.app"
-          test -L "$RUNNER_TEMP/aqc-mount/Applications"
+        run: python scripts/macos_dmg.py --verify
       - name: Verify release sizes, integrity and SHA256
         shell: bash
         run: |
