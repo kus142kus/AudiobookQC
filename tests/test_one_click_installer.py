@@ -12,6 +12,27 @@ spec.loader.exec_module(builder)
 
 
 class OneClickInstallerTests(unittest.TestCase):
+    def test_staging_inside_app_is_refused_without_deleting_anything(self):
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td)
+            app=root/'the-app'
+            app.mkdir()
+            original=app/'AudiobookQC.exe'
+            original.write_bytes(b'MZimportant')
+            with self.assertRaisesRegex(ValueError, 'overlaps application'):
+                builder.prepare(app, app/'staging', root/'model.zip')
+            self.assertEqual(original.read_bytes(), b'MZimportant')
+
+    def test_cannot_delete_app_by_passing_parent_staging(self):
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td)
+            app=root/'app'
+            app.mkdir()
+            (app/'AudiobookQC.exe').write_bytes(b'MZimportant')
+            with self.assertRaisesRegex(ValueError, 'overlaps application'):
+                builder.prepare(app, root, root/'model.zip')
+            self.assertTrue((app/'AudiobookQC.exe').is_file())
+
     def test_synthetic_bundle_roundtrip_and_inno_template(self):
         builder.source_self_test()
 

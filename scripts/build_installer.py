@@ -57,6 +57,17 @@ def prepare(app: Path = APP, staged: Path = STAGED, model_zip: Path = MODEL_ZIP)
     not create another nesting layer or misplace PyInstaller files.
     """
     app, staged, model_zip = map(Path, (app, staged, model_zip))
+    # Guard accidental/hostile output arguments. Deleting a staging folder must
+    # NEVER delete the frozen app, source tree, or the user's recordings.
+    app_resolved, stage_resolved, zip_resolved = (p.resolve() for p in (app, staged, model_zip))
+    if (app_resolved == stage_resolved or
+            app_resolved.is_relative_to(stage_resolved) or
+            stage_resolved.is_relative_to(app_resolved)):
+        raise ValueError('Staging directory overlaps application files; refusing destructive copy')
+    if zip_resolved.is_relative_to(app_resolved) or zip_resolved.is_relative_to(stage_resolved):
+        raise ValueError('Model ZIP output may not be nested in frozen app or staging')
+    if staged.exists() and staged.is_symlink():
+        raise ValueError('Staging directory must not be a symlink')
     if not (app / 'AudiobookQC.exe').is_file():
         raise FileNotFoundError(f'Expected frozen Windows EXE: {app / "AudiobookQC.exe"}')
     model_dir = app / MODEL_REL
@@ -66,6 +77,8 @@ def prepare(app: Path = APP, staged: Path = STAGED, model_zip: Path = MODEL_ZIP)
     if staged.exists():
         shutil.rmtree(staged)
     staged.mkdir(parents=True)
+    if any(x.is_symlink() for x in app.rglob('*')):
+        raise ValueError('Windows installer bundle contains unexpected symbolic links')
     all_files = [x for x in app.rglob('*') if x.is_file()]
     files_model = [x for x in all_files if x.is_relative_to(model_dir)]
     files_main = [x for x in all_files if not x.is_relative_to(model_dir)]
