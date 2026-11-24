@@ -19,7 +19,7 @@ import uuid
 import webbrowser
 import zipfile
 
-from . import worker
+from . import worker, __version__
 from .analysis import fmt_time
 
 WEB = (Path(getattr(sys, "_MEIPASS")) / "web" if getattr(sys, "frozen", False)
@@ -31,7 +31,7 @@ UPLOADS.mkdir(parents=True, exist_ok=True)
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "AudiobookQC/0.2"
+    server_version = f"AudiobookQC/{__version__}"
 
     def log_message(self, format, *args):
         if os.environ.get("AUDIOBOOK_QC_DEBUG"):
@@ -144,7 +144,7 @@ class Handler(BaseHTTPRequestHandler):
             pid = m.group(1)
             job = worker.load_job(pid)
             # No audio, manuscript, recognized phrases, or user file paths.
-            info = {"app_version": "0.2", "platform": platform.system(),
+            info = {"app_version": __version__, "platform": platform.system(),
                     "python_version": platform.python_version(), "status": job["status"],
                     "duration_seconds": job["duration"], "part_minutes": job["part_minutes"],
                     "model": job["model"], "completed_parts": sum(p["status"] == "done" for p in job["parts"]),

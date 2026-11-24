@@ -19,6 +19,7 @@
       <p class="lead">Загрузите аудиозапись и текст книги. Найдём предполагаемые оговорки, пропуски и повторы, затем подготовим Word-отчёты по готовым частям.</p>
       <div class="card upload-card">
         <h2>Исходные материалы</h2><p class="muted small">Файлы не отправляются в интернет</p>
+        <div class="folder-choice"><button id="pickFolder" class="btn primary" type="button">📁 Выбрать папку с двумя файлами</button><span class="muted small">Программа сама найдёт аудио и рукопись, если каждого файла по одному.</span></div>
         <div class="file-field"><div class="file-icon">♫</div><div class="file-text"><b>Аудиозапись</b><span id="audioLabel">MP3, WAV, M4A и другие форматы</span></div><button id="pickAudio" class="btn secondary">Выбрать файл</button></div>
         <div class="file-field"><div class="file-icon doc">▤</div><div class="file-text"><b>Рукопись</b><span id="textLabel">DOCX или TXT</span></div><button id="pickText" class="btn secondary">Выбрать файл</button></div>
         <div class="divider"></div>
@@ -36,7 +37,7 @@
         <div class="card-heading"><div><h2 id="progressTitle">Ход проверки</h2><p id="progressMessage" class="muted small">—</p></div><strong id="progressPercent" class="percent">0%</strong></div>
         <div class="progress-track"><div id="progressFill" class="progress-fill"></div></div>
         <div class="progress-info"><span id="progressRange">00:00 / 00:00</span><span id="progressParts">0 / 0 частей</span></div>
-        <div class="button-row"><button id="resumeBtn" class="btn primary">▶ Продолжить</button><button id="pauseBtn" class="btn secondary">Ⅱ Приостановить</button><button id="openReportsBtn" class="btn secondary push-right">▤ Папка с отчётами</button></div>
+        <div class="button-row"><button id="resumeBtn" class="btn primary">▶ Продолжить</button><button id="pauseBtn" class="btn secondary">Ⅱ Приостановить</button><button id="finalReportBtn" class="btn primary hidden" type="button">↓ Сохранить итоговый Word</button><button id="openReportsBtn" class="btn secondary push-right">▤ Папка с отчётами</button></div>
       </div>
       <div class="stat-grid"><div class="stat"><strong id="readyParts">0/0</strong><span>Готовые части</span></div><div class="stat"><strong id="issueCount">0</strong><span>Найдено кандидатов</span></div><div class="stat"><strong id="priorityCount">0</strong><span>Высокий приоритет</span></div><div class="stat"><strong id="repeatCount">0</strong><span>Возможные повторы</span></div></div>
       <div class="section-heading"><div><h2>Отчёты по частям</h2><p>Готовые Word-файлы можно сохранить до окончания проверки.</p></div></div>

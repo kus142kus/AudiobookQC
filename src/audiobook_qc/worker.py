@@ -69,6 +69,44 @@ def read_json(path: Path, default=None):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def valid_chunk_checkpoint(data, start: float, end: float) -> bool:
+    """Treat local checkpoints as untrusted after an interrupted write.
+
+    An intact JSON file can still contain a truncated/invalid structure. Such
+    caches must be recomputed rather than crashing an hours-long resumed job.
+    """
+    if not isinstance(data, dict) or not isinstance(data.get('words'), list):
+        return False
+    if not isinstance(data.get('acoustic', []), list):
+        return False
+    try:
+        if not (math.isfinite(float(data.get('start'))) and
+                math.isfinite(float(data.get('end')))):
+            return False
+        if abs(float(data['start']) - start) > .01 or abs(float(data['end']) - end) > .01:
+            return False
+        words = data['words']
+        if len(words) > 50_000 or len(data.get('acoustic', [])) > 50_000:
+            return False
+        if not all(isinstance(event, dict) for event in data.get('acoustic', [])):
+            return False
+        for word in words:
+            if (not isinstance(word, dict) or not isinstance(word.get('word'), str)
+                    or not word['word'].strip()):
+                return False
+            word_start, word_end = float(word.get('start')), float(word.get('end'))
+            if not (math.isfinite(word_start) and math.isfinite(word_end)
+                    and word_start >= 0 and word_end >= word_start):
+                return False
+            # Timestamps from the overlapping ASR window may extend slightly
+            # outside this chunk, but never many minutes away.
+            if word_start < max(0.0, start - OVERLAP_SECONDS - 5) or word_end > end + OVERLAP_SECONDS + 5:
+                return False
+        return True
+    except (ValueError, TypeError, OverflowError):
+        return False
+
+
 def quiet_subprocess_kwargs() -> dict:
     """Prevent FFmpeg from flashing a console window on Windows."""
     return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)} if os.name == "nt" else {}
@@ -231,9 +269,7 @@ def model_worker(pid: str):
                 if chunk_path.exists():
                     try:
                         cached = read_json(chunk_path)
-                        if (isinstance(cached, dict) and isinstance(cached.get("words"), list)
-                                and abs(float(cached.get("start", -1)) - pos) < .01
-                                and abs(float(cached.get("end", -1)) - finish) < .01):
+                        if valid_chunk_checkpoint(cached, pos, finish):
                             chunk_data = cached
                     except (ValueError, TypeError, OSError):
                         pass  # Damaged or partial checkpoint: decode it again.

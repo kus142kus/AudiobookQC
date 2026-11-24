@@ -55,6 +55,14 @@ def create_project(audio: Path, manuscript: Path, part_minutes: int = 20,
     # before copying a multi-hour audio file, never download at runtime.
     from .events import model_dir, _manifest_verified
     _manifest_verified(model_dir())
+    # A direct project keeps private copies of the original files. Check
+    # capacity before starting multi-gigabyte copies, not halfway through.
+    # Leave headroom for incremental JSON and reports during processing.
+    needed = audio.stat().st_size + manuscript.stat().st_size + 256 * 1024**2
+    root = worker.ROOT
+    root.mkdir(parents=True, exist_ok=True)
+    if shutil.disk_usage(root).free < needed:
+        raise ValueError('Недостаточно свободного места для копии аудио и текста проекта (нужен запас 256 МБ).')
     pid = uuid.uuid4().hex
     base = worker.job_dir(pid)
     inputs = base / 'inputs'

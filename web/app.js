@@ -35,6 +35,7 @@ function renderProject(p){
  $('readyParts').textContent=`${done}/${p.parts.length}`;
  $('issueCount').textContent=p.all_count;$('priorityCount').textContent=p.high_count;$('repeatCount').textContent=p.repeat_count;
  $('resumeBtn').disabled=isRunning(p.status)||p.status==='completed';$('pauseBtn').disabled=!isRunning(p.status);
+ $('finalReportBtn').classList.toggle('hidden',p.status!=='completed');
  $('partsGrid').innerHTML=p.parts.map(part=>`<div class="part"><div><strong>Часть ${part.index} · ${esc(part.start)}–${esc(part.end)}</strong><small class="${part.status==='done'?'state-ready':part.status==='running'?'state-progress':''}">${part.status==='done'?'✓ Готов Word-отчёт':part.status==='running'?'◷ Обрабатывается':'Ожидает проверки'}</small></div>${part.status==='done'?`<button class="btn secondary" data-report="${part.index}">↓ Word</button>`:''}</div>`).join('');
  renderIssues(p.issues);main.scrollTop=scroll;
 }
@@ -51,6 +52,7 @@ function renderIssues(issues){
  $('markFixed').disabled=selected.review==='fixed';$('markFalse').disabled=selected.review==='false';}
 }
 async function choose(kind){try{const path=await invoke('pick_file',kind);if(path){state[kind]=path;$(kind==='audio'?'audioLabel':'textLabel').textContent=shortName(path)}}catch(e){notify(e.message||e)}}
+async function chooseFolder(){try{const pair=await invoke('pick_folder');if(!pair)return;state.audio=pair.audio;state.text=pair.text;$('audioLabel').textContent=shortName(pair.audio);$('textLabel').textContent=shortName(pair.text)}catch(e){notify(e.message||e)}}
 async function create(){if(!state.audio||!state.text)return notify('Выбери аудиозапись и рукопись.');if(state.busy)return;state.busy=true;const btn=$('createBtn');btn.disabled=true;btn.textContent='Создаём проект…';try{const id=await invoke('new_project',state.audio,state.text,+$('minutes').value,$('glossary').value);await refreshProjects();await openProject(id)}catch(e){notify('Не удалось начать проверку: '+(e.message||e))}finally{state.busy=false;btn.disabled=false;btn.innerHTML='Начать проверку <span>→</span>'}}
 async function updateJob(operation){if(!state.id)return;try{await invoke(operation,state.id);await refreshProject()}catch(e){notify(e.message||e)}}
 async function removeProject(pid){const project=state.projects.find(p=>p.id===pid);if(!project)return;
@@ -70,8 +72,8 @@ let tickBusy=false;
 async function tick(){if(!native()||tickBusy||state.busy)return;tickBusy=true;try{await refreshProjects();if(state.id&&state.view==='project')await refreshProject();if(state.clip){applyPlayer(await invoke('player_state'))}}finally{tickBusy=false}}
 $('newNav').addEventListener('click',()=>{state.id=null;state.selected=null;show('new')});
 $('projectList').addEventListener('click',e=>{const del=e.target.closest('[data-delete]'), open=e.target.closest('[data-id]');if(del)removeProject(del.dataset.delete);else if(open)openProject(open.dataset.id)});
-$('pickAudio').onclick=()=>choose('audio');$('pickText').onclick=()=>choose('text');$('createBtn').onclick=create;
-$('resumeBtn').onclick=()=>updateJob('resume');$('pauseBtn').onclick=()=>updateJob('pause');$('openReportsBtn').onclick=openReports;
+$('pickFolder').onclick=chooseFolder;$('pickAudio').onclick=()=>choose('audio');$('pickText').onclick=()=>choose('text');$('createBtn').onclick=create;
+$('finalReportBtn').onclick=()=>downloadPart(0);$('resumeBtn').onclick=()=>updateJob('resume');$('pauseBtn').onclick=()=>updateJob('pause');$('openReportsBtn').onclick=openReports;
 $('partsGrid').addEventListener('click',e=>{const part=e.target.closest('[data-report]');if(part)downloadPart(+part.dataset.report)});
 $('issues').addEventListener('click',e=>{const issue=e.target.closest('[data-issue]');if(issue)selectIssue(issue.dataset.issue)});
 $('prevPage').onclick=()=>{state.page=Math.max(0,state.page-1);renderIssues(state.project.issues)};

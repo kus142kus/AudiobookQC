@@ -345,6 +345,10 @@ def generate_report(path: Path, project: dict, issues: list[dict], start: float,
     reviews = reviews or {}
     rows = []
     for item in sorted(issues, key=lambda x: x['start']):
+        # A listener has explicitly rejected this candidate. Keep the raw
+        # JSON evidence, but do not put it back in a corrections document.
+        if reviews.get(item.get('id')) == 'false':
+            continue
         if item.get('kind') in ADVISORY_KINDS or effective_severity(item) != 'high':
             continue
         if (project.get('report_policy') in ('second-pass', 'dual-gigaam')

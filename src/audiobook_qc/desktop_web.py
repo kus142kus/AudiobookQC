@@ -42,6 +42,31 @@ def bundled_html() -> str:
         "<!-- AQC_SCRIPT -->", "<script>"+script+"</script>")
 
 
+AUDIO_SUFFIXES = frozenset(('.wav', '.mp3', '.m4a', '.flac', '.aac', '.ogg', '.mp4'))
+TEXT_SUFFIXES = frozenset(('.txt', '.docx'))
+
+
+def discover_input_pair(folder: Path) -> dict[str, str]:
+    """Choose an unambiguous one-audio/one-manuscript pair in a folder.
+
+    Never guess which recording matches a manuscript, and never recurse into
+    private nested folders. The user may still choose files separately.
+    """
+    folder = Path(folder).expanduser().resolve(strict=True)
+    if not folder.is_dir():
+        raise ValueError('Выбранный путь не является папкой')
+    files = [p for p in folder.iterdir() if p.is_file() and not p.is_symlink()]
+    audio = [p for p in files if p.suffix.lower() in AUDIO_SUFFIXES]
+    text = [p for p in files if p.suffix.lower() in TEXT_SUFFIXES]
+    if len(audio) != 1 or len(text) != 1:
+        raise ValueError(
+            f'В папке найдено аудиофайлов: {len(audio)}, текстовых документов: {len(text)}. '
+            'Для автоматического выбора нужны ровно один аудиофайл и один DOCX/TXT. '
+            'Если файлов больше, выбери нужные по отдельности.'
+        )
+    return {'audio': str(audio[0]), 'text': str(text[0])}
+
+
 class Bridge:
     def __init__(self):
         self.window = None
@@ -86,6 +111,13 @@ class Bridge:
         parts = [{"index": p["index"], "start": fmt_time(p["start"]),
                   "end": fmt_time(p["end"]), "status": p["status"],
                   "count": p.get("issue_count", 0)} for p in job.get("parts", [])]
+        def selected_high(issue):
+            return (effective_severity(issue) == 'high'
+                    and reviews.get(issue.get('id')) != 'false'
+                    and (job.get('report_policy') != 'dual-gigaam'
+                         or issue.get('kind') not in ('replacement', 'omission', 'extra', 'repeat')
+                         or issue.get('dual_confirmed')))
+
         return {"id": pid, "name": job.get("audio_name", ""),
                 "text_name": job.get("text_name", ""), "status": job.get("status", "ready"),
                 "message": job.get("message", ""), "duration": job.get("duration", 0),
@@ -95,8 +127,14 @@ class Bridge:
                 "model": job.get("model", ""), "part_minutes": job.get("part_minutes", 20),
                 "report_policy": job.get("report_policy", ""),
                 "parts": parts, "issues": filtered, "all_count": len(issues),
-                "high_count": sum(effective_severity(x)=="high" for x in issues),
-                "repeat_count": sum(x.get("kind")=="repeat" for x in issues)}
+                "high_count": sum(selected_high(x) for x in issues),
+                "repeat_count": sum(x.get("kind") == 'repeat' and selected_high(x) for x in issues)}
+
+    def pick_folder(self):
+        """Native folder dialog for the usual two-file audiobook workflow."""
+        import webview
+        chosen = self.window.create_file_dialog(webview.FOLDER_DIALOG, allow_multiple=False)
+        return discover_input_pair(Path(chosen[0])) if chosen else None
 
     def pick_file(self, category: str):
         if category not in ("audio", "text"):
@@ -161,9 +199,14 @@ class Bridge:
         job = worker.load_job(pid)
         ready = {int(p["index"]) for p in job["parts"] if p.get("status")=="done"}
         index = int(part_index)
-        if index not in ready:
-            raise ValueError("Эта часть ещё не готова")
-        source = worker.job_dir(pid) / "reports" / f"Часть_{index:03d}.docx"
+        if index == 0:
+            if job.get('status') != 'completed':
+                raise ValueError('Итоговый отчёт доступен после завершения проверки')
+            source = worker.job_dir(pid) / 'reports' / 'Полный_отчёт.docx'
+        else:
+            if index not in ready:
+                raise ValueError('Эта часть ещё не готова')
+            source = worker.job_dir(pid) / 'reports' / f'Часть_{index:03d}.docx'
         if not source.is_file():
             raise FileNotFoundError("Word-отчёт не найден")
         import webview

@@ -9,3 +9,5 @@
 .player-options{display:flex;align-items:center;gap:16px;color:var(--sub)}.player-options select{border:1px solid var(--border);padding:7px;background:white;border-radius:8px;color:var(--ink)}
 
 #glossary{box-sizing:border-box;display:block;width:100%;min-height:75px;resize:vertical;padding:13px;margin-bottom:7px;border:1px solid var(--border);border-radius:11px;background:#fff;color:var(--ink);font:inherit;line-height:1.5;}
+
+.folder-choice{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:16px 0 20px}.folder-choice .small{flex:1;min-width:220px;line-height:1.45}

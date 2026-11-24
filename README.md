@@ -1,10 +1,12 @@
 # Audiobook QC — офлайн-проверка озвучки аудиокниг
 
-**Open-source desktop app (0.9 beta candidate)** for local comparison of audiobook recordings with manuscripts. No subscription, API key, external browser, or cloud transcription required after the complete offline bundle has been installed.
+**Open-source desktop app (0.9.1 beta / исходники-кандидат для будущей 1.0)** for local comparison of audiobook recordings with manuscripts. No subscription, API key, external browser, or cloud transcription required after the complete offline bundle has been installed.
 
 > **Состояние:** исходники и автоматические тесты доступны. Успешная сборка CI **не доказывает** отсутствие ошибок в дикторской записи или совместимость на любом компьютере. Для публичной беты ещё требуются проверка на настоящих Windows/Mac M4, аудит лицензий вложенных моделей и подпись macOS.
 
-📌 [Путь к стабильной версии 1.0 и объективная оценка точности](docs/Путь-к-версии-1.0.md) — текущий архив является обновлением исходников, а не готовым выпуском 1.0.
+📌 [Путь к стабильной версии 1.0 и объективная оценка точности](docs/Путь-к-версии-1.0.md) — это **полный исходный проект с интегрированными доработками**, но пока не готовый выпуск 1.0.
+
+**Удобства для диктора:** в новой проверке можно выбрать папку с **ровно одним аудио и ровно одним DOCX/TXT** — приложение найдёт оба файла; по окончании проверки можно одной кнопкой сохранить итоговый Word. Замечания, отмеченные как «Не ошибка», остаются в журнале, но убираются из корректурного Word.
 
 ## Для чего приложение
 

@@ -259,7 +259,7 @@ def extract_docx(source: str | Path, output: str | Path) -> int:
         def idx(parts: tuple[str, ...]) -> int | None:
             return next((i for i, h in enumerate(headers) if any(p in h for p in parts)), None)
         t_idx = idx(('время', 'таймкод', 'timestamp'))
-        exp_idx = idx(('по тексту', 'оригинал', 'верный', 'expected'))
+        exp_idx = idx(('по тексту', 'по рукописи', 'оригинал', 'верный', 'expected'))
         heard_idx = idx(('распознано', 'озвучено', 'услышано', 'recognized', 'heard'))
         if t_idx is None or exp_idx is None or heard_idx is None:
             continue
@@ -270,7 +270,16 @@ def extract_docx(source: str | Path, output: str | Path) -> int:
             try:
                 t = seconds(values[t_idx])
             except ValueError:
-                continue
+                # The application's Word cells contain '01 / 00:05:24'.
+                # Extract only a full timecode; do not treat the row number
+                # as minutes or silently invent a timestamp.
+                match = re.search(r'(?<!\d)\d+:\d{2}:\d{2}(?:[.,]\d{1,3})?(?!\d)', values[t_idx])
+                if not match:
+                    continue
+                try:
+                    t = seconds(match.group(0))
+                except ValueError:
+                    continue
             if not values[exp_idx] and not values[heard_idx]:
                 continue
             records.append({'time': hhmmss(t), 'kind': 'unspecified',
