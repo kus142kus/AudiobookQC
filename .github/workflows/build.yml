@@ -1,4 +1,4 @@
-name: Audiobook QC 0.7 - extended offline quality checks
+name: Audiobook QC 0.9 - readable reports and offline builds
 
 on:
   workflow_dispatch:
@@ -36,6 +36,9 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Verify actual runner OS and architecture BEFORE costly setup
+        shell: bash
+        run: python scripts/check_ci_platform.py "${{ matrix.target }}"
       - name: Prefer CPU-only PyTorch on Windows to avoid GPU/CUDA bundles
         if: runner.os == 'Windows'
         shell: bash
@@ -189,6 +192,8 @@ jobs:
             --name AudiobookQC --paths src \
             --add-data 'models:models' \
             --add-data 'web:web' \
+            --add-data 'LICENSE:.' \
+            --add-data 'THIRD_PARTY_NOTICES.md:.' \
             --collect-all webview \
             --collect-all imageio_ffmpeg \
             --collect-all faster_whisper \
@@ -212,6 +217,10 @@ jobs:
         shell: pwsh
         run: |
           Compress-Archive -Path dist/AudiobookQC -DestinationPath dist/AudiobookQC-Windows.zip -Force
+      - name: Verify every native macOS library targets Apple Silicon
+        if: runner.os == 'macOS'
+        shell: bash
+        run: python scripts/macos_bundle_audit.py dist/AudiobookQC.app
       - name: DMG Apple Silicon app
         if: runner.os == 'macOS'
         shell: bash
@@ -219,6 +228,18 @@ jobs:
           hdiutil create -volname 'Audiobook QC Offline' \
             -srcfolder dist/AudiobookQC.app -ov -format UDZO \
             dist/AudiobookQC-Mac.dmg
+      - name: Verify DMG integrity (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: hdiutil verify dist/AudiobookQC-Mac.dmg
+      - name: Verify public-release size, ZIP integrity, and SHA256
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            python scripts/check_release_assets.py dist/AudiobookQC-Windows.zip
+          else
+            python scripts/check_release_assets.py dist/AudiobookQC-Mac.dmg
+          fi
       - name: Upload tested package
         uses: actions/upload-artifact@v4
         with:
@@ -226,5 +247,6 @@ jobs:
           path: |
             dist/AudiobookQC-Windows.zip
             dist/AudiobookQC-Mac.dmg
+            dist/*.sha256
           if-no-files-found: error
           retention-days: 15
