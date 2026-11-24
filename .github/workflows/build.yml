@@ -94,3 +94,137 @@ jobs:
         shell: bash
         run: python scripts/get_event_model.py
       - name: Verify offline event model and perform 3-second ONNX inference
+        shell: bash
+        env:
+          HF_HUB_OFFLINE: '1'
+          TRANSFORMERS_OFFLINE: '1'
+        run: |
+          python - <<'PYCODE'
+          import sys, tempfile, wave
+          from pathlib import Path
+          sys.path.insert(0,'src')
+          from audiobook_qc.events import AudioEventDetector
+          detector = AudioEventDetector()
+          with tempfile.TemporaryDirectory() as td:
+              wav=Path(td)/'test.wav'
+              with wave.open(str(wav),'wb') as f:
+                  f.setnchannels(1); f.setsampwidth(2); f.setframerate(16000)
+                  f.writeframes(b'\x00\x00'*16000*3)
+              result=detector.inspect(wav,0,0,3)
+              assert isinstance(result,list)
+          print('AUDIOBOOK_QC_YAMNET_REAL_INFERENCE_OK',flush=True)
+          PYCODE
+      - name: Verify downloaded GigaAM shortform-only patch and checksum
+        shell: bash
+        run: |
+          python - <<'PYCODE'
+          import sys
+          sys.path.insert(0, 'src')
+          from audiobook_qc.dual_engine import check_model_hash
+          from pathlib import Path
+          folder = Path('models/gigaam')
+          check_model_hash(folder)
+          text = (folder/'modeling_gigaam.py').read_text(encoding='utf-8')
+          assert 'from pyannote.audio import' not in text
+          assert 'from pyannote.audio.pipelines import' not in text
+          print('GigaAM bundle checks and optional-import audit passed', flush=True)
+          PYCODE
+      - name: Preflight independent GigaAM before packaging (diagnose model vs PyInstaller)
+        shell: bash
+        timeout-minutes: 10
+        env:
+          HF_HUB_OFFLINE: '1'
+          TRANSFORMERS_OFFLINE: '1'
+          OMP_NUM_THREADS: '2'
+          MKL_NUM_THREADS: '2'
+          OPENBLAS_NUM_THREADS: '2'
+        run: |
+          python - <<'PYCODE'
+          import faulthandler
+          import sys
+          import tempfile
+          import wave
+          from pathlib import Path
+          sys.path.insert(0, 'src')
+          faulthandler.dump_traceback_later(90, repeat=True)
+          from audiobook_qc.dual_engine import load_secondary_model, extract_transcription_text
+          try:
+              print('GigaAM plain Python preflight: starting', flush=True)
+              model = load_secondary_model(validate_hash=False, on_stage=lambda s: print(s, flush=True))
+              with tempfile.TemporaryDirectory(prefix='aqc-ci-gigaam-') as name:
+                  wav = Path(name) / 'silence.wav'
+                  with wave.open(str(wav), 'wb') as out:
+                      out.setnchannels(1)
+                      out.setsampwidth(2)
+                      out.setframerate(16000)
+                      out.writeframes(b'\x00\x00' * 16000)
+                  print('GigaAM plain Python preflight: running 1s inference', flush=True)
+                  result = model.transcribe(str(wav))
+                  assert isinstance(extract_transcription_text(result), str)
+              print('AUDIOBOOK_QC_GIGAAM_PYTHON_PREFLIGHT_OK', flush=True)
+          finally:
+              faulthandler.cancel_dump_traceback_later()
+          PYCODE
+      - name: Check free disk space before packaging
+        shell: bash
+        run: |
+          python -c "import shutil; s=shutil.disk_usage('.'); print('Available GiB:',round(s.free/(1024**3),2)); assert s.free > 3*1024**3, 'Insufficient disk for bundled models'"
+      - name: Build self-contained app (native offline UI, Qt on Windows)
+        shell: bash
+        run: |
+          extra=()
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            # Keep the .NET pythonnet runtime OUT of the Windows executable.
+            # Force and bundle the same Qt WebEngine used by the preflight.
+            extra+=(--hidden-import webview.platforms.qt)
+            extra+=(--hidden-import PySide6.QtWebEngineWidgets)
+            extra+=(--hidden-import PySide6.QtWebEngineCore)
+            extra+=(--hidden-import PySide6.QtWebChannel)
+            extra+=(--exclude-module pythonnet --exclude-module clr --exclude-module clr_loader)
+            extra+=(--exclude-module webview.platforms.winforms)
+            extra+=(--exclude-module PyQt5 --exclude-module PyQt6 --exclude-module PySide2)
+          fi
+          python -m PyInstaller --noconfirm --clean --onedir --windowed \
+            "${extra[@]}" \
+            --name AudiobookQC --paths src \
+            --add-data 'models:models' \
+            --add-data 'web:web' \
+            --collect-all webview \
+            --collect-all imageio_ffmpeg \
+            --collect-all faster_whisper \
+            --collect-all ctranslate2 \
+            --collect-all av \
+            --collect-all tokenizers \
+            --collect-all sounddevice \
+            --collect-all transformers \
+            --collect-all torchaudio \
+            --collect-all omegaconf \
+            --collect-all hydra \
+            --collect-all sentencepiece \
+            --collect-all onnxruntime \
+            run.py
+      - name: Verify REAL frozen GUI and all bundled local models
+        shell: bash
+        run: |
+          python scripts/check_bundle.py "${{ runner.os == 'Windows' && 'dist/AudiobookQC/AudiobookQC.exe' || 'dist/AudiobookQC.app/Contents/MacOS/AudiobookQC' }}"
+      - name: ZIP Windows distribution
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/AudiobookQC -DestinationPath dist/AudiobookQC-Windows.zip -Force
+      - name: DMG Apple Silicon app
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          hdiutil create -volname 'Audiobook QC Offline' \
+            -srcfolder dist/AudiobookQC.app -ov -format UDZO \
+            dist/AudiobookQC-Mac.dmg
+      - name: Upload tested package
+        uses: actions/upload-artifact@v4
+        with:
+          name: AudiobookQC-${{ matrix.target }}
+          path: |
+            dist/AudiobookQC-Windows.zip
+            dist/AudiobookQC-Mac.dmg
+          if-no-files-found: error
+          retention-days: 15
