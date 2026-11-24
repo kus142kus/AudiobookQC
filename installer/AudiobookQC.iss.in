@@ -34,7 +34,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Source: "@@STAGED@@\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Inno handles download, hash verification, progress and ZIP extraction.
 ; No extra tools, no second manual ZIP and no browser are required.
-Source: "@@MODEL_SOURCE@@"; DestDir: "{app}"; DestName: "AQC-Model.zip"; ExternalSize: @@MODEL_BYTES@@; Hash: "@@MODEL_SHA@@"; Flags: @@MODEL_FLAGS@@; Check: NeedsWhisperDownload
+Source: "@@MODEL_SOURCE@@"; DestDir: "{app}"; @@MODEL_DESTNAME@@ExternalSize: @@MODEL_BYTES@@; Hash: "@@MODEL_SHA@@"; Flags: @@MODEL_FLAGS@@; Check: NeedsWhisperDownload
 
 [Icons]
 Name: "{autoprograms}\Audiobook QC"; Filename: "{app}\AudiobookQC.exe"; WorkingDir: "{app}"

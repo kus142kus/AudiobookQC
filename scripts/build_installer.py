@@ -131,9 +131,11 @@ def render(manifest: dict, *, staged: Path = STAGED, filename: Path = GENERATED,
     if source_override:
         model_source = str(source_override).replace('/', '\\')
         model_flags = 'external extractarchive ignoreversion'
+        model_destname = ''  # Inno forbids DestName with local extractarchive.
     else:
         model_source = manifest['url']
         model_flags = 'external download extractarchive ignoreversion'
+        model_destname = 'DestName: \"AQC-Model.zip\"; '  # Required for downloads.
     values = {
         '@@STAGED@@': file_source,
         '@@OUT@@': str(out_dir.resolve()).replace('/', '\\'),
@@ -142,6 +144,7 @@ def render(manifest: dict, *, staged: Path = STAGED, filename: Path = GENERATED,
         '@@APPID@@': 'AudiobookQC-CI-Installer-Test' if test else 'AudiobookQC.kus142kus',
         '@@MODEL_SOURCE@@': model_source,
         '@@MODEL_FLAGS@@': model_flags,
+        '@@MODEL_DESTNAME@@': model_destname,
         '@@MODEL_BYTES@@': str(manifest['model_unpacked_bytes']),
         '@@MODEL_SHA@@': manifest['model_sha256'],
         '@@MODEL_BIN_SHA@@': manifest['model_bin_sha256'],
@@ -151,6 +154,10 @@ def render(manifest: dict, *, staged: Path = STAGED, filename: Path = GENERATED,
         text = text.replace(k, v)
     if '@@' in text:
         raise RuntimeError('Unresolved Inno Setup template tokens')
+    if source_override and ('DestName: \"AQC-Model.zip\";' in text or ' download ' in text):
+        raise RuntimeError('Local ZIP fixture may not specify DestName or download flag')
+    if not source_override and ('DestName: \"AQC-Model.zip\";' not in text or 'download extractarchive' not in text):
+        raise RuntimeError('Public installer must download its ZIP with a stable DestName')
     if not test and (manifest['model_sha256'] not in text or manifest['url'] not in text):
         raise RuntimeError('Production installer lacks version-pinned download and checksum')
     filename.parent.mkdir(parents=True, exist_ok=True)
@@ -171,11 +178,18 @@ def find_iscc() -> Path:
     raise RuntimeError('Inno Setup compiler missing on GitHub CI runner (not needed by end user)')
 
 
-def compile_iss(iss: Path, *, compiler: Path | None = None) -> Path:
+def compile_iss(iss: Path, *, compiler: Path | None = None,
+                output_dir: Path = DIST, output_name: str | None = None) -> Path:
+    """Compile and locate setup in the exact OutputDir used by render().
+
+    Integration tests render into a temporary directory, while production
+    renders into dist/. Looking only in dist/ breaks otherwise valid CI tests.
+    """
     compiler = compiler or find_iscc()
     subprocess.run([str(compiler), '/Q', str(iss.resolve())], check=True, cwd=ROOT)
-    exe_name = 'AQC-CI-Test' if 'CI-Test' in iss.read_text(encoding='utf-8-sig') else 'AQC-Setup'
-    result = DIST / (exe_name + '.exe')
+    if output_name is None:
+        output_name = 'AQC-CI-Test' if 'CI-Test' in iss.read_text(encoding='utf-8-sig') else 'AQC-Setup'
+    result = Path(output_dir) / (output_name + '.exe')
     if not result.is_file():
         raise FileNotFoundError(f'Inno Setup reported success but output missing: {result}')
     if result.stat().st_size >= MAX_ASSET:
@@ -251,7 +265,7 @@ def integration_test_inno() -> None:
         manifest = prepare(app, folder/'core', archive)
         iss = render(manifest, staged=folder/'core', filename=folder/'test.iss',
                      source_override=str(archive), test=True, out_dir=folder)
-        setup = compile_iss(iss)
+        setup = compile_iss(iss, output_dir=folder, output_name='AQC-CI-Test')
         installation = folder / 'installation'
         result = subprocess.run([
             str(setup), '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART',
