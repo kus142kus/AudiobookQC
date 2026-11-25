@@ -166,15 +166,48 @@ def package_app(app: Path, image: Path) -> Path:
     pending.unlink(missing_ok=True)
     image.unlink(missing_ok=True)
     try:
-        try:
-            run_hdiutil(['create', '-volname', 'Audiobook QC Offline',
-                         '-srcfolder', str(stage), '-format', 'UDZO',
-                         '-ov', str(pending)], attempts=4, timeout=1200)
-        except DiskImageError:
+        # Preserve the established UDZO format for the normal Apple Silicon build.
+        # For the optional Intel preview, the PyTorch bundle can exceed GitHub's
+        # per-asset limit. Repack the SAME unmodified app with progressively
+        # stronger macOS-native compression; never remove models or resources.
+        # ULFO (LZFSE) works on OS X 10.11+, ULMO (LZMA) on macOS 10.15+.
+        # Neither format changes the installed application's bytes.
+        oversized = []
+        for fmt in ('UDZO', 'ULFO', 'ULMO'):
             pending.unlink(missing_ok=True)
-            raise
-        validate_udif_footer(pending)
-        os.replace(pending, image)
+            try:
+                run_hdiutil(['create', '-volname', 'Audiobook QC Offline',
+                             '-srcfolder', str(stage), '-format', fmt,
+                             '-ov', str(pending)], attempts=4, timeout=1800)
+                size = validate_udif_footer(pending)
+            except DiskImageError as exc:
+                pending.unlink(missing_ok=True)
+                if fmt == 'UDZO':
+                    raise
+                oversized.append(f'{fmt}: create failed ({exc})')
+                print(f'AQC_DMG_COMPRESSION_UNAVAILABLE {fmt}: {exc}', flush=True)
+                continue
+            print(f'AQC_DMG_COMPRESSION_RESULT {fmt}: '
+                  f'{size / 1024**2:.1f} MiB', flush=True)
+            if size < MAX_RELEASE_BYTES:
+                os.replace(pending, image)
+                print(f'AQC_DMG_COMPRESSION_SELECTED {fmt}', flush=True)
+                break
+            oversized.append(f'{fmt}: {size / 1024**2:.1f} MiB')
+            pending.unlink(missing_ok=True)
+        else:
+            detail = '; '.join(oversized)
+            large = sorted(
+                ((entry.stat().st_size, entry.relative_to(stage))
+                 for entry in stage.rglob('*') if entry.is_file() and not entry.is_symlink()),
+                reverse=True)[:10]
+            print('AQC_DMG_TOP_BUNDLE_FILES:', flush=True)
+            for file_size, relative in large:
+                print(f'  {file_size / 1024**2:,.1f} MiB {relative}', flush=True)
+            raise DiskImageError(
+                'No lossless DMG compression format fits the GitHub Releases '
+                '2 GiB per-file limit. The original app is intact in dmg-root. '
+                f'Attempts: {detail}')
     finally:
         pending.unlink(missing_ok=True)
     print(f'AQC_DMG_CREATED {image} ({image.stat().st_size / 1024**2:.1f} MiB)',
