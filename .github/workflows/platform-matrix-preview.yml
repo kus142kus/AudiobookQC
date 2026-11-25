@@ -47,7 +47,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             xvfb libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0 \
-            libxcb-xinerama0 libnss3 libgbm1 libasound2t64 libdbus-1-3
+            libxcb-xinerama0 libnss3 libgbm1 libasound2t64 libdbus-1-3 libportaudio2
       - name: Install native model, Python and Qt dependencies
         shell: bash
         run: |
@@ -120,8 +120,40 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  intel-safe-gigaam:
+    name: Safely convert pinned GigaAM to safetensors on Linux (PyTorch >=2.6)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Use patched PyTorch for secured checkpoint conversion
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'huggingface_hub>=0.26,<2' 'safetensors>=0.4,<1' 'packaging>=24,<27'
+          python -m pip check
+      - name: Obtain exactly pinned GigaAM, verify source SHA, convert only tensor weights
+        shell: bash
+        run: |
+          python scripts/get_offline_model.py --gigaam-only
+          PYTHONPATH=src python scripts/convert_gigaam_safetensors.py
+          test -s models/gigaam/model.safetensors
+          test ! -e models/gigaam/pytorch_model.bin
+      - name: Upload safely converted weights for Intel preview (no public release)
+        uses: actions/upload-artifact@v4
+        with:
+          name: AQC-Intel-GigaAM-SAFE
+          path: models/gigaam/
+          if-no-files-found: error
+          retention-days: 1
+
   mac-intel:
-    name: Experimental macOS Intel (older PyTorch dependency, NOT stable)
+    name: Experimental macOS Intel (safetensors, NOT stable)
+    needs: intel-safe-gigaam
     runs-on: macos-15-intel
     timeout-minutes: 120
     steps:
@@ -146,7 +178,13 @@ jobs:
           python -m pip install 'numpy<2'
           python -m pip install --only-binary=:all: torch==2.2.2 torchaudio==2.2.2
           python -m pip install -r requirements-intel-ci.txt
+          python -m pip install 'safetensors>=0.4,<1'
           python -m pip check
+          python - <<'PY'
+          import torch
+          assert torch.__version__.split('+')[0] == '2.2.2', 'Intel runner must keep its pinned torch'
+          print('AQC_MAC_INTEL_TORCH_2_2_2_OK')
+          PY
       - name: Test real Intel GUI and source code
         shell: bash
         run: |
@@ -154,12 +192,31 @@ jobs:
           python scripts/preflight_source.py
           python -m unittest discover -s tests -v
           python run.py --smoke-gui
-      - name: Download offline models and verify Intel-specific inference
+      - name: Download signed-by-CI GigaAM safetensors artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: AQC-Intel-GigaAM-SAFE
+          path: models/gigaam
+      - name: Download Whisper only and verify safe Intel GigaAM inference
         shell: bash
+        env:
+          HF_HUB_OFFLINE: '1'
+          TRANSFORMERS_OFFLINE: '1'
         run: |
-          python scripts/get_offline_model.py
+          # GigaAM comes from our checked Linux conversion job, NOT from .bin
+          # downloaded onto the old Intel PyTorch runtime.
+          test -s models/gigaam/model.safetensors
+          test ! -e models/gigaam/pytorch_model.bin
+          python - <<'PY'
+          import sys
+          sys.path.insert(0,'src')
+          from audiobook_qc.dual_engine import check_model_hash
+          from pathlib import Path
+          check_model_hash(Path('models/gigaam'))
+          print('AQC_MAC_INTEL_SAFE_CHECKSUM_OK',flush=True)
+          PY
+          python scripts/get_offline_model.py --whisper-only
           python scripts/get_event_model.py
-          # Important: if GigaAM needs newer PyTorch, this step fails and NOTHING is published.
           python - <<'PY'
           import sys, wave, tempfile
           from pathlib import Path
@@ -248,7 +305,9 @@ jobs:
           Expand-Archive -Path arm-smoke/AQC-Setup-artifact.zip -DestinationPath arm-smoke/setup -Force
           $exe = Get-ChildItem arm-smoke/setup -Filter AQC-Setup.exe -Recurse | Select-Object -First 1
           if (!$exe) { throw 'AQC-Setup.exe not found inside Windows x64 artifact' }
-          # PE header check: 0x8664 = x86-64. This is intentionally NOT an ARM64 native binary.
+          # Inno Setup's self-extracting launcher can be PE32/x86 (0x014C),
+          # even when its installed payload is x64. Do not confuse the stub
+          # architecture with the actual packaged AudiobookQC application.
           $stream = [IO.File]::OpenRead($exe.FullName)
           try {
             $reader = [IO.BinaryReader]::new($stream)
@@ -257,23 +316,25 @@ jobs:
             $stream.Seek($offset, [IO.SeekOrigin]::Begin) | Out-Null
             if ($reader.ReadUInt32() -ne 0x4550) { throw 'Invalid PE signature' }
             $machine = $reader.ReadUInt16()
-            if ($machine -ne 0x8664) { throw "Unexpected PE machine: $machine" }
+            if ($machine -notin @(0x014c, 0x8664)) { throw "Unexpected Inno Setup PE machine: $machine" }
+            $stubArchitecture = if ($machine -eq 0x014c) { 'x86 (Inno bootstrapper)' } else { 'x64' }
           } finally { $stream.Dispose() }
           "Windows 11 ARM64 runner: $env:PROCESSOR_ARCHITECTURE" | Set-Content arm-smoke/result.txt
           "Source Windows x64 run database ID: $runId" | Add-Content arm-smoke/result.txt
-          "PE architecture: x86-64 (emulated, NOT ARM64 native)" | Add-Content arm-smoke/result.txt
+          "Setup PE architecture: $stubArchitecture (not proof of payload architecture)" | Add-Content arm-smoke/result.txt
           "Installation, model inference and Word export have NOT been tested on ARM64." | Add-Content arm-smoke/result.txt
-          # Starting this Inno EXE with /HELP tests the OS x64 loader, not a full installation.
+          # Starting Inno setup with /HELP probes x86/x64 setup loader only.
+          # It does NOT verify embedded AudiobookQC x64 execution or models.
           $proc = Start-Process -FilePath $exe.FullName -ArgumentList '/HELP' -PassThru
           Start-Sleep -Seconds 6
           $proc.Refresh()
           if (!$proc.HasExited) {
             Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-            'Inno Setup process launched under x64 emulation (UI probe stopped after six seconds).' | Add-Content arm-smoke/result.txt
+            'Inno Setup bootstrapper launched (UI probe stopped after six seconds).' | Add-Content arm-smoke/result.txt
           } elseif ($proc.ExitCode -eq 0) {
-            'Inno Setup /HELP exited successfully under x64 emulation.' | Add-Content arm-smoke/result.txt
+            'Inno Setup /HELP exited successfully (bootstrapper probe only).' | Add-Content arm-smoke/result.txt
           } else {
-            throw "Inno Setup x64 executable exited with $($proc.ExitCode). Native ARM64 not yet supported."
+            throw "Inno Setup bootstrapper exited with $($proc.ExitCode). Native ARM64 not yet supported."
           }
           Get-Content arm-smoke/result.txt
       - name: Upload ARM64 emulation evidence (not a native installer)
