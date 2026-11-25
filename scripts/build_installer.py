@@ -28,7 +28,7 @@ MODEL_ZIP = DIST / 'AQC-Model.zip'
 INSTALLER = ROOT / 'installer' / 'AudiobookQC.iss.in'
 GENERATED = DIST / 'AudiobookQC.generated.iss'
 MAX_ASSET = 2 * 1024**3
-RELEASE_TAG = 'v1.0.0-rc.1'
+RELEASE_TAG = 'v1.0.0-rc.2'
 REPO = 'kus142kus/AudiobookQC'
 MODEL_REL = Path('_internal/models/medium')
 

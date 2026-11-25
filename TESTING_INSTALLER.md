@@ -10,7 +10,7 @@
 2. Откройте https://github.com/kus142kus/AudiobookQC/upload/main . Загрузите содержимое, сохраняя пути файлов.
 3. Особое внимание — `.github/workflows/build.yml`. Если он не заменился, обновите его отдельно через https://github.com/kus142kus/AudiobookQC/edit/main/.github/workflows/build.yml . В конце файла должен быть job `release` с шагом `Publish GitHub public prerelease with direct EXE and DMG links`.
 4. Откройте https://github.com/kus142kus/AudiobookQC/actions . Обычный commit проверяет сборки, но пока ничего не публикует.
-5. Чтобы получить **настоящий тестовый установщик по публичной ссылке**, откройте workflow `Audiobook QC 1.0 RC - offline release assets` → `Run workflow` → поставьте `publish_beta = true` и запустите. После успешной сборки автоматически будет создан **Pre-release** `v1.0.0-rc.1` с тремя файлами.
+5. Чтобы получить **настоящий тестовый установщик по публичной ссылке**, откройте workflow `Audiobook QC 1.0 RC - offline release assets` → `Run workflow` → поставьте `publish_beta = true` и запустите. После успешной сборки автоматически будет создан **Pre-release** `v1.0.0-rc.2` с тремя файлами.
 6. Откройте https://github.com/kus142kus/AudiobookQC/releases и скачайте `AQC-Setup.exe`. **Не скачивайте Actions Artifacts. Не загружайте модель вручную.** Это будет тот же способ, что у всех пользователей.
 
 ## Проверки и ограничения

@@ -14,8 +14,8 @@ spec.loader.exec_module(builder)
 class InstallerInnoRegressions(unittest.TestCase):
     def _manifest(self):
         return {
-            'tag': 'v1.0.0-rc.1',
-            'url': 'https://github.com/kus142kus/AudiobookQC/releases/download/v1.0.0-rc.1/AQC-Model.zip',
+            'tag': 'v1.0.0-rc.2',
+            'url': 'https://github.com/kus142kus/AudiobookQC/releases/download/v1.0.0-rc.2/AQC-Model.zip',
             'model_unpacked_bytes': 120_000_000,
             'model_sha256': 'a' * 64,
             'model_bin_sha256': 'b' * 64,
