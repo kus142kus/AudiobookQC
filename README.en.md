@@ -52,3 +52,5 @@ Developer commands: `python -m unittest discover -s tests -v`. Production CI tar
 A separate **manually triggered** GitHub Actions preview can now try Linux x64, Linux ARM64, macOS Intel and Windows 11 ARM64. Linux and macOS Intel builds are published as **experimental artifacts only if actual CI verification succeeds**. On Windows ARM64, the test checks launching the existing **x64** setup via Windows 11 emulation; this is **not** an ARM64-native app and does not test the transcription models. None of these experimental platforms is advertised as production-ready.
 
 See [details](docs/Дополнительные-платформы.md). Stable Windows x64 and Apple Silicon workflows remain unchanged.
+
+**Experimental platform notes:** Linux audio playback requires the system PortAudio library (`libportaudio2` on Ubuntu). Intel macOS preview receives GigaAM weights converted to `safetensors` on a modern Linux PyTorch runner; compatibility remains unproven until actual CI inference passes. Windows ARM64 preview probes the Inno installer bootstrapper, which can be an x86 executable even when the packaged application is x64; the application itself has not been tested on ARM64.

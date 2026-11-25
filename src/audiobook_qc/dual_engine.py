@@ -21,7 +21,9 @@ GIGAAM_VERSION = 'v3_e2e_ctc'
 GIGAAM_DIRNAME = 'gigaam'
 GIGAAM_MODEL = 'v3_e2e_ctc.ckpt'
 GIGAAM_TOKENIZER = 'v3_e2e_ctc_tokenizer.model'
-HF_FILES = ('config.json', 'modeling_gigaam.py', 'pytorch_model.bin', 'tokenizer.model')
+HF_COMMON_FILES = ('config.json', 'modeling_gigaam.py', 'tokenizer.model')
+HF_FILES = HF_COMMON_FILES + ('pytorch_model.bin',)  # standard Windows/M4 bundle
+HF_SAFE_FILES = HF_COMMON_FILES + ('model.safetensors',)  # Intel-only safe bundle
 HF_MANIFEST = 'model_manifest.json'
 HF_REVISION = 'cec030b4c4f35d928e4a9044a3bdb29ebd499fac'
 # Model checksum published by the upstream project's load_model implementation.
@@ -73,8 +75,11 @@ def resolve_secondary_dir() -> Path:
     roots += [bundled_root() / 'models', ROOT / 'models']
     for base in roots:
         d = base / GIGAAM_DIRNAME
-        if (all((d / item).is_file() and (d / item).stat().st_size > 0
-                for item in HF_FILES + (HF_MANIFEST,))
+        has_manifest = (d / HF_MANIFEST).is_file()
+        if (has_manifest and any(
+                all((d / item).is_file() and (d / item).stat().st_size > 0
+                    for item in names)
+                for names in (HF_FILES, HF_SAFE_FILES))
                 or all((d / item).is_file() and (d / item).stat().st_size > 0
                 for item in (GIGAAM_MODEL, GIGAAM_TOKENIZER))):
             return d
@@ -91,10 +96,18 @@ def check_model_hash(folder: Path) -> None:
         manifest = json.loads((folder / HF_MANIFEST).read_text(encoding='utf-8'))
         if manifest.get('revision') != HF_REVISION:
             raise ValueError('Неизвестная ревизия офлайн-модели GigaAM')
-        for name in HF_FILES:
-            meta = manifest.get('files', {}).get(name, {})
+        manifest_files = manifest.get('files')
+        if not isinstance(manifest_files, dict):
+            raise ValueError('Некорректный перечень файлов GigaAM')
+        # Exactly one model weight format, never silently accept missing files.
+        allowed = (frozenset(HF_FILES), frozenset(HF_SAFE_FILES))
+        if frozenset(manifest_files) not in allowed:
+            raise ValueError('В манифесте GigaAM нужен один проверенный формат весов')
+        for name in manifest_files:
+            meta = manifest_files[name]
             f = folder/name
-            if (not f.is_file() or f.stat().st_size != meta.get('size')
+            if (not isinstance(meta, dict) or not f.is_file()
+                    or f.stat().st_size != meta.get('size')
                     or not isinstance(meta.get('sha256'), str)):
                 raise ValueError(f'Некорректный файл GigaAM: {name}')
             digest = hashlib.sha256()
@@ -169,8 +182,12 @@ def load_secondary_model(*, validate_hash: bool = True, on_stage=None):
         stage("GigaAM: importing Transformers")
         from transformers import AutoModel
         stage("GigaAM: loading HF model weights (CPU)")
+        # Intel preview bundles contain only safetensors weights.  An explicit
+        # safe-only flag avoids falling back to vulnerable pickle checkpoints.
+        safe_weights = (folder / 'model.safetensors').is_file()
+        options = {'use_safetensors': True} if safe_weights else {}
         model = AutoModel.from_pretrained(
-            str(folder), trust_remote_code=True, local_files_only=True)
+            str(folder), trust_remote_code=True, local_files_only=True, **options)
         stage("GigaAM: model weights loaded, switching to evaluation mode")
         # from_pretrained without device_map loads on CPU, float32 by default.
         # Avoid duplicating model weights with a redundant full-model conversion.

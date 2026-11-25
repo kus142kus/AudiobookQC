@@ -190,7 +190,10 @@ class ClipPlayer:
         try:
             import sounddevice as sd
             sd.stop()
-        except ImportError:
+        except (ImportError, OSError):
+            # Headless Linux CI, or systems without PortAudio, must still be
+            # able to load/seek clips and clean up an idle player.  Actual
+            # playback will still report a missing audio backend.
             pass
 
 

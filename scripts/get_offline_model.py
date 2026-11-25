@@ -79,7 +79,7 @@ def make_shortform_compatible(source_file: Path) -> dict:
             'note': 'Only the optional longform pyannote imports were deferred; 23s shortform inference unchanged'}
 
 
-def download_models() -> None:
+def download_whisper() -> None:
     from huggingface_hub import snapshot_download
 
     whisper = Path('models/medium')
@@ -95,6 +95,10 @@ def download_models() -> None:
     if (whisper / 'model.bin').stat().st_size < 100_000_000:
         raise RuntimeError('Whisper model weights unexpectedly small')
     print('Whisper medium downloaded and checked', flush=True)
+
+
+def download_gigaam() -> None:
+    from huggingface_hub import snapshot_download
 
     giga = Path('models/gigaam')
     giga.mkdir(parents=True, exist_ok=True)
@@ -123,5 +127,24 @@ def download_models() -> None:
     print('Model revision:', GIGA_REVISION, flush=True)
 
 
+
+def download_models() -> None:
+    download_whisper()
+    download_gigaam()
+
+
 if __name__ == '__main__':
-    download_models()
+    import argparse
+    parser = argparse.ArgumentParser()
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--gigaam-only', action='store_true',
+                      help='Only download GigaAM (secure Linux checkpoint conversion)')
+    mode.add_argument('--whisper-only', action='store_true',
+                      help='Only download Whisper (Intel runner receives verified safe GigaAM)')
+    options = parser.parse_args()
+    if options.gigaam_only:
+        download_gigaam()
+    elif options.whisper_only:
+        download_whisper()
+    else:
+        download_models()
