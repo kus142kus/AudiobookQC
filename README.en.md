@@ -28,7 +28,7 @@
 
 **Download from [GitHub Releases](https://github.com/kus142kus/AudiobookQC/releases), not from the source-code ZIP.** If RC2 is not yet published there, it is not publicly downloadable as a release. For Windows, download the **EXE only**; the installer manages `AQC-Model.zip` automatically. For Apple Silicon, download the **DMG only**. The app may trigger OS security warnings because a public code-signing/notarization process is not yet in place.
 
-[Full installation instructions (RU)](docs/Установка-в-общем-доступе.md) · [User guide (RU)](docs/Руководство-пользователя.md) · [Platform roadmap](docs/Платформы-и-план.md)
+[Installation (RU)](docs/Установка-в-общем-доступе.md) · [User guide (RU)](docs/Руководство-пользователя.md) · [FAQ (RU)](docs/Частые-вопросы.md) · [Additional platform trials (RU)](docs/Дополнительные-платформы.md) · [Platform roadmap](docs/Платформы-и-план.md)
 
 ## Quick start
 
@@ -46,3 +46,9 @@ Processing is designed to stay on the local computer. Please **do not upload pri
 Source code: [MIT license](LICENSE). **Bundled ASR weights, native libraries, FFmpeg, and Qt have separate terms**; see [third-party notices](THIRD_PARTY_NOTICES.md). A full license review is required before a stable public release.
 
 Developer commands: `python -m unittest discover -s tests -v`. Production CI targets Windows x64 and Apple Silicon macOS; Linux preview workflows are manually triggered and experimental.
+
+## Other platforms: work in progress
+
+A separate **manually triggered** GitHub Actions preview can now try Linux x64, Linux ARM64, macOS Intel and Windows 11 ARM64. Linux and macOS Intel builds are published as **experimental artifacts only if actual CI verification succeeds**. On Windows ARM64, the test checks launching the existing **x64** setup via Windows 11 emulation; this is **not** an ARM64-native app and does not test the transcription models. None of these experimental platforms is advertised as production-ready.
+
+See [details](docs/Дополнительные-платформы.md). Stable Windows x64 and Apple Silicon workflows remain unchanged.
