@@ -221,6 +221,7 @@ jobs:
             --add-data 'web:web' \
             --add-data 'LICENSE:.' \
             --add-data 'THIRD_PARTY_NOTICES.md:.' \
+            --collect-data docx \
             --collect-all webview \
             --collect-all imageio_ffmpeg \
             --collect-all faster_whisper \

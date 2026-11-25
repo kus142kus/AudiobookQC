@@ -86,6 +86,7 @@ jobs:
             --exclude-module webview.platforms.winforms \
             --add-data 'models:models' --add-data 'web:web' \
             --add-data 'LICENSE:.' --add-data 'THIRD_PARTY_NOTICES.md:.' \
+            --collect-data docx \
             --collect-all webview --collect-all imageio_ffmpeg \
             --collect-all faster_whisper --collect-all ctranslate2 \
             --collect-all av --collect-all tokenizers \
@@ -238,6 +239,7 @@ jobs:
             --name AudiobookQC --paths src \
             --add-data 'models:models' --add-data 'web:web' \
             --add-data 'LICENSE:.' --add-data 'THIRD_PARTY_NOTICES.md:.' \
+            --collect-data docx \
             --collect-all webview --collect-all imageio_ffmpeg \
             --collect-all faster_whisper --collect-all ctranslate2 \
             --collect-all av --collect-all tokenizers \
