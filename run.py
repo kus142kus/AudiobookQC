@@ -23,19 +23,19 @@ def _stage(message: str) -> None:
 
 
 def _install_frozen_macos_docx_recovery(*, force: bool = False) -> None:
-    """Keep Word reports working if PyInstaller relocates docx XML templates.
+    """Recover missing python-docx header/footer templates on ALL frozen OSes.
 
-    On macOS the python-docx module lives under Contents/Frameworks while
-    PyInstaller may place its data under Contents/Resources. python-docx
-    resolves header/footer XML relative to the module's __file__, which can
-    therefore point at a nonexistent file despite --collect-data docx.
+    PyInstaller can put docx templates in a different directory from the
+    python-docx module on Windows, Linux and macOS.  python-docx locates these
+    resources relative to its own __file__, which is not always where
+    PyInstaller placed them.  The recovery runs on every frozen platform and
+    falls back to valid minimal Word XML only when a template is genuinely
+    missing.  It never modifies the frozen application on disk.
 
-    This recovery is deliberately runtime-only: it does not modify the .app
-    after PyInstaller has signed it. Normal installations keep the original
-    python-docx behaviour. Only missing header/footer template files trigger
-    the fallback. ``force`` permits a reproducible non-macOS regression test.
+    The original function name is retained for compatibility with existing
+    project tests and imports. ``force`` enables source-level regression tests.
     """
-    if not force and not (getattr(sys, "frozen", False) and sys.platform == "darwin"):
+    if not force and not getattr(sys, "frozen", False):
         return
 
     from docx.parts.hdrftr import HeaderPart, FooterPart
