@@ -1,0 +1,286 @@
+# Experimental platform trials (auto-start once when this workflow is uploaded, then manual reruns).
+# They do not modify the proven Windows x64 + Apple Silicon build.yml workflow.
+name: Audiobook QC - additional platforms PREVIEW (manual)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/platform-matrix-preview.yml'
+  workflow_dispatch:
+    inputs:
+      windows_x64_run_id:
+        description: 'Optional GitHub Actions DATABASE run ID of a successful build.yml run (leave blank for newest success)'
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  linux:
+    name: Preview ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: Linux-x64
+            runner: ubuntu-24.04
+            machine: x86_64
+          - target: Linux-ARM64
+            runner: ubuntu-24.04-arm
+            machine: aarch64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Confirm real CPU and install graphical runtime
+        shell: bash
+        run: |
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = "${{ matrix.machine }}"
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            xvfb libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0 \
+            libxcb-xinerama0 libnss3 libgbm1 libasound2t64 libdbus-1-3
+      - name: Install native model, Python and Qt dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          if [ "${{ matrix.machine }}" = x86_64 ]; then
+            python -m pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+          else
+            python -m pip install --only-binary=:all: torch==2.8.0 torchaudio==2.8.0
+          fi
+          python -m pip install -r requirements-build.txt
+          python -m pip install --force-reinstall setuptools==80.9.0
+          python -m pip check
+      - name: Validate all source tests and real Qt GUI BEFORE downloading models
+        shell: bash
+        env:
+          QTWEBENGINE_DISABLE_SANDBOX: '1'
+          QTWEBENGINE_CHROMIUM_FLAGS: '--no-sandbox --disable-gpu'
+        run: |
+          python scripts/verify_release_contract.py
+          python scripts/preflight_source.py
+          python -m unittest discover -s tests -v
+          xvfb-run -a python run.py --smoke-gui
+      - name: Download and verify models (on CI machine only)
+        shell: bash
+        run: |
+          python scripts/get_offline_model.py
+          python scripts/get_event_model.py
+      - name: Build fully local Linux desktop app
+        shell: bash
+        run: |
+          python -m PyInstaller --noconfirm --clean --onedir --windowed \
+            --name AudiobookQC --paths src \
+            --hidden-import webview.platforms.qt \
+            --hidden-import PySide6.QtWebEngineWidgets \
+            --hidden-import PySide6.QtWebEngineCore \
+            --hidden-import PySide6.QtWebChannel \
+            --exclude-module pythonnet --exclude-module clr --exclude-module clr_loader \
+            --exclude-module webview.platforms.winforms \
+            --add-data 'models:models' --add-data 'web:web' \
+            --add-data 'LICENSE:.' --add-data 'THIRD_PARTY_NOTICES.md:.' \
+            --collect-all webview --collect-all imageio_ffmpeg \
+            --collect-all faster_whisper --collect-all ctranslate2 \
+            --collect-all av --collect-all tokenizers \
+            --collect-all sounddevice --collect-all transformers \
+            --collect-all torchaudio --collect-all omegaconf \
+            --collect-all hydra --collect-all sentencepiece \
+            --collect-all onnxruntime run.py
+      - name: Verify the FROZEN app and bundled speech models offline
+        shell: bash
+        timeout-minutes: 25
+        env:
+          QTWEBENGINE_DISABLE_SANDBOX: '1'
+          QTWEBENGINE_CHROMIUM_FLAGS: '--no-sandbox --disable-gpu'
+          HF_HUB_OFFLINE: '1'
+          TRANSFORMERS_OFFLINE: '1'
+        run: xvfb-run -a python scripts/check_bundle.py dist/AudiobookQC/AudiobookQC
+      - name: Package the tested Linux app and checksum
+        shell: bash
+        run: |
+          test -x dist/AudiobookQC/AudiobookQC
+          tar -czf "dist/AudiobookQC-${{ matrix.target }}-PREVIEW.tar.gz" -C dist AudiobookQC
+          (cd dist && sha256sum "AudiobookQC-${{ matrix.target }}-PREVIEW.tar.gz" > "AudiobookQC-${{ matrix.target }}-PREVIEW.tar.gz.sha256")
+      - name: Upload experimental Linux bundle (not a public stable installer)
+        uses: actions/upload-artifact@v4
+        with:
+          name: AQC-${{ matrix.target }}-PREVIEW
+          path: |
+            dist/AudiobookQC-${{ matrix.target }}-PREVIEW.tar.gz
+            dist/AudiobookQC-${{ matrix.target }}-PREVIEW.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  mac-intel:
+    name: Experimental macOS Intel (older PyTorch dependency, NOT stable)
+    runs-on: macos-15-intel
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Confirm Intel and install isolated, Intel-compatible PyTorch fallback
+        shell: bash
+        run: |
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = x86_64
+          python -m pip install --upgrade pip
+          # Official torch 2.8 distributions do not cover macOS Intel.
+          # Change versions ONLY IN THE RUNNER's temporary requirements, not in the release source.
+          python - <<'PY'
+          from pathlib import Path
+          lines = Path('requirements-build.txt').read_text(encoding='utf-8').splitlines()
+          kept = [line for line in lines if not line.startswith(('torch==','torchaudio=='))]
+          Path('requirements-intel-ci.txt').write_text('\n'.join(kept)+'\n', encoding='utf-8')
+          PY
+          python -m pip install 'numpy<2'
+          python -m pip install --only-binary=:all: torch==2.2.2 torchaudio==2.2.2
+          python -m pip install -r requirements-intel-ci.txt
+          python -m pip check
+      - name: Test real Intel GUI and source code
+        shell: bash
+        run: |
+          python scripts/verify_release_contract.py
+          python scripts/preflight_source.py
+          python -m unittest discover -s tests -v
+          python run.py --smoke-gui
+      - name: Download offline models and verify Intel-specific inference
+        shell: bash
+        run: |
+          python scripts/get_offline_model.py
+          python scripts/get_event_model.py
+          # Important: if GigaAM needs newer PyTorch, this step fails and NOTHING is published.
+          python - <<'PY'
+          import sys, wave, tempfile
+          from pathlib import Path
+          sys.path.insert(0,'src')
+          from audiobook_qc.dual_engine import load_secondary_model, extract_transcription_text
+          model=load_secondary_model(validate_hash=True)
+          with tempfile.TemporaryDirectory() as d:
+              f=Path(d)/'test.wav'
+              with wave.open(str(f),'wb') as out:
+                  out.setnchannels(1);out.setsampwidth(2);out.setframerate(16000)
+                  out.writeframes(b'\x00\x00'*16000)
+              assert isinstance(extract_transcription_text(model.transcribe(str(f))),str)
+          print('AQC_MAC_INTEL_GIGAAM_REAL_INFERENCE_OK',flush=True)
+          PY
+      - name: Build actual Intel-native macOS app if dependencies succeeded
+        shell: bash
+        run: |
+          python -m PyInstaller --noconfirm --clean --onedir --windowed \
+            --name AudiobookQC --paths src \
+            --add-data 'models:models' --add-data 'web:web' \
+            --add-data 'LICENSE:.' --add-data 'THIRD_PARTY_NOTICES.md:.' \
+            --collect-all webview --collect-all imageio_ffmpeg \
+            --collect-all faster_whisper --collect-all ctranslate2 \
+            --collect-all av --collect-all tokenizers \
+            --collect-all sounddevice --collect-all transformers \
+            --collect-all torchaudio --collect-all omegaconf \
+            --collect-all hydra --collect-all sentencepiece \
+            --collect-all onnxruntime run.py
+      - name: Check correct Intel executable and ALL frozen models
+        shell: bash
+        env:
+          HF_HUB_OFFLINE: '1'
+          TRANSFORMERS_OFFLINE: '1'
+        run: |
+          test -f dist/AudiobookQC.app/Contents/MacOS/AudiobookQC
+          lipo -archs dist/AudiobookQC.app/Contents/MacOS/AudiobookQC | grep -w x86_64
+          python scripts/check_bundle.py dist/AudiobookQC.app/Contents/MacOS/AudiobookQC
+      - name: Create and VERIFY actual DMG only after real inference and offline smoke
+        shell: bash
+        run: |
+          python scripts/macos_dmg.py --package
+          python scripts/macos_dmg.py --verify
+          mv dist/AudiobookQC-Mac.dmg dist/AudiobookQC-Mac-Intel-PREVIEW.dmg
+          python scripts/check_release_assets.py dist/AudiobookQC-Mac-Intel-PREVIEW.dmg
+      - name: Upload Intel DMG ONLY if all checks passed
+        uses: actions/upload-artifact@v4
+        with:
+          name: AQC-Mac-Intel-PREVIEW
+          path: |
+            dist/AudiobookQC-Mac-Intel-PREVIEW.dmg
+            dist/AudiobookQC-Mac-Intel-PREVIEW.dmg.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  windows-arm64:
+    name: Windows 11 ARM64 x64-EMULATION smoke (not a native build)
+    runs-on: windows-11-arm
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AQC_SOURCE_RUN_ID: ${{ inputs.windows_x64_run_id }}
+    steps:
+      - name: Download AQC-Setup from a successful Windows x64 build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $headers = @{
+            Authorization = "Bearer $env:GH_TOKEN"
+            Accept = 'application/vnd.github+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          $repo = $env:GITHUB_REPOSITORY
+          if ($env:AQC_SOURCE_RUN_ID) {
+            if ($env:AQC_SOURCE_RUN_ID -notmatch '^\d+$') { throw 'Run ID must be a GitHub Actions DATABASE ID (not run number).' }
+            $runId = $env:AQC_SOURCE_RUN_ID
+          } else {
+            $list = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/actions/workflows/build.yml/runs?branch=main&status=success&per_page=30" -Headers $headers
+            $runId = ($list.workflow_runs | Where-Object { $_.conclusion -eq 'success' } | Select-Object -First 1).id
+          }
+          if (!$runId) { throw 'No successful build.yml run found. Run Windows x64 build first.' }
+          $artifacts = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/actions/runs/$runId/artifacts?per_page=100" -Headers $headers
+          $artifact = $artifacts.artifacts | Where-Object { $_.name -eq 'AQC-Setup' -and !$_.expired } | Select-Object -First 1
+          if (!$artifact) { throw "AQC-Setup artifact missing or expired for run $runId" }
+          New-Item -ItemType Directory -Force arm-smoke | Out-Null
+          Invoke-WebRequest -Uri "https://api.github.com/repos/$repo/actions/artifacts/$($artifact.id)/zip" -Headers $headers -OutFile arm-smoke/AQC-Setup-artifact.zip
+          Expand-Archive -Path arm-smoke/AQC-Setup-artifact.zip -DestinationPath arm-smoke/setup -Force
+          $exe = Get-ChildItem arm-smoke/setup -Filter AQC-Setup.exe -Recurse | Select-Object -First 1
+          if (!$exe) { throw 'AQC-Setup.exe not found inside Windows x64 artifact' }
+          # PE header check: 0x8664 = x86-64. This is intentionally NOT an ARM64 native binary.
+          $stream = [IO.File]::OpenRead($exe.FullName)
+          try {
+            $reader = [IO.BinaryReader]::new($stream)
+            $stream.Seek(0x3c, [IO.SeekOrigin]::Begin) | Out-Null
+            $offset = $reader.ReadInt32()
+            $stream.Seek($offset, [IO.SeekOrigin]::Begin) | Out-Null
+            if ($reader.ReadUInt32() -ne 0x4550) { throw 'Invalid PE signature' }
+            $machine = $reader.ReadUInt16()
+            if ($machine -ne 0x8664) { throw "Unexpected PE machine: $machine" }
+          } finally { $stream.Dispose() }
+          "Windows 11 ARM64 runner: $env:PROCESSOR_ARCHITECTURE" | Set-Content arm-smoke/result.txt
+          "Source Windows x64 run database ID: $runId" | Add-Content arm-smoke/result.txt
+          "PE architecture: x86-64 (emulated, NOT ARM64 native)" | Add-Content arm-smoke/result.txt
+          "Installation, model inference and Word export have NOT been tested on ARM64." | Add-Content arm-smoke/result.txt
+          # Starting this Inno EXE with /HELP tests the OS x64 loader, not a full installation.
+          $proc = Start-Process -FilePath $exe.FullName -ArgumentList '/HELP' -PassThru
+          Start-Sleep -Seconds 6
+          $proc.Refresh()
+          if (!$proc.HasExited) {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            'Inno Setup process launched under x64 emulation (UI probe stopped after six seconds).' | Add-Content arm-smoke/result.txt
+          } elseif ($proc.ExitCode -eq 0) {
+            'Inno Setup /HELP exited successfully under x64 emulation.' | Add-Content arm-smoke/result.txt
+          } else {
+            throw "Inno Setup x64 executable exited with $($proc.ExitCode). Native ARM64 not yet supported."
+          }
+          Get-Content arm-smoke/result.txt
+      - name: Upload ARM64 emulation evidence (not a native installer)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AQC-Windows-ARM64-EMULATION-SMOKE
+          path: arm-smoke/result.txt
+          if-no-files-found: warn
+          retention-days: 7
