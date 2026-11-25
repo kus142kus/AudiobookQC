@@ -21,6 +21,77 @@ def _stage(message: str) -> None:
         print(message, flush=True)
 
 
+
+def _install_frozen_macos_docx_recovery(*, force: bool = False) -> None:
+    """Keep Word reports working if PyInstaller relocates docx XML templates.
+
+    On macOS the python-docx module lives under Contents/Frameworks while
+    PyInstaller may place its data under Contents/Resources. python-docx
+    resolves header/footer XML relative to the module's __file__, which can
+    therefore point at a nonexistent file despite --collect-data docx.
+
+    This recovery is deliberately runtime-only: it does not modify the .app
+    after PyInstaller has signed it. Normal installations keep the original
+    python-docx behaviour. Only missing header/footer template files trigger
+    the fallback. ``force`` permits a reproducible non-macOS regression test.
+    """
+    if not force and not (getattr(sys, "frozen", False) and sys.platform == "darwin"):
+        return
+
+    from docx.parts.hdrftr import HeaderPart, FooterPart
+
+    if getattr(HeaderPart, "_aqc_missing_template_recovery", False):
+        return
+
+    originals = {
+        "default-header.xml": HeaderPart._default_header_xml,
+        "default-footer.xml": FooterPart._default_footer_xml,
+    }
+    namespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    # Minimal valid blank Word part. Used only if the installed model's exact
+    # header/footer XML is not present in *any* frozen resource location.
+    backup = {
+        "default-header.xml": f'<w:hdr xmlns:w="{namespace}"><w:p/></w:hdr>'.encode(),
+        "default-footer.xml": f'<w:ftr xmlns:w="{namespace}"><w:p/></w:ftr>'.encode(),
+    }
+
+    def read_or_recover(name: str) -> bytes:
+        try:
+            return originals[name]()
+        except FileNotFoundError as error:
+            # Never mask unrelated missing files.
+            if Path(error.filename or "").name != name:
+                raise
+            roots: list[Path] = []
+            bundled = getattr(sys, "_MEIPASS", None)
+            if bundled:
+                roots.append(Path(bundled) / "docx" / "templates")
+            if getattr(sys, "frozen", False) and sys.platform == "darwin":
+                contents = Path(sys.executable).absolute().parent.parent
+                roots.extend([
+                    contents / "Resources" / "docx" / "templates",
+                    contents / "Frameworks" / "docx" / "templates",
+                ])
+            for root in roots:
+                candidate = root / name
+                if candidate.is_file():
+                    data = candidate.read_bytes()
+                    if data:
+                        _stage(f"AQC_WORD_TEMPLATE_RECOVERED: {name} from bundled resources")
+                        return data
+            _stage(f"AQC_WORD_TEMPLATE_RECOVERED: {name} using valid blank Word part")
+            return backup[name]
+
+    HeaderPart._default_header_xml = classmethod(
+        lambda cls: read_or_recover("default-header.xml")
+    )
+    FooterPart._default_footer_xml = classmethod(
+        lambda cls: read_or_recover("default-footer.xml")
+    )
+    HeaderPart._aqc_missing_template_recovery = True
+    FooterPart._aqc_missing_template_recovery = True
+
+
 def _silent_wav(path: Path) -> None:
     """A tiny deterministic PCM WAV for checking speech inference."""
     import wave
@@ -188,6 +259,7 @@ def main(argv=None) -> int:
     # Catch smoke-test exceptions before the windowed PyInstaller bootloader
     # can open an invisible/modal error dialog and make GitHub Actions hang.
     try:
+        _install_frozen_macos_docx_recovery()
         if args.self_test:
             self_test()
         elif args.test_whisper:
