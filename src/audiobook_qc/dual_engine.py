@@ -315,24 +315,34 @@ def verify_with_gigaam(second_model, audio: Path, issues: list[dict], duration: 
     Unknown / failed checks are never promoted to the Word report.
     """
     result = [dict(issue) for issue in issues]
+    # A handful of short-but-meaningful substitutions must get a fair chance
+    # at independent verification. Otherwise 18 long candidates can exhaust
+    # the budget and hide a crucial "дом/дым" or "мир/тир" substitution.
+    # Only try candidates with neighboring anchors: an isolated word in a
+    # 23-second GigaAM crop is not trustworthy confirmation.
+    short_candidates = []
+    for i, issue in enumerate(result):
+        if issue.get('kind') != 'replacement':
+            continue
+        spoken, expected = issue.get('spoken', ''), issue.get('expected', '')
+        if (len(tokenize(spoken)) == len(tokenize(expected)) == 1
+                and not low_value_difference(spoken, expected)
+                and (len(tokenize(issue.get('before_anchor', ''))) >= 2
+                     or len(tokenize(issue.get('after_anchor', ''))) >= 2)):
+            short_candidates.append(i)
+    # Reserve a SMALL bounded slice of the existing budget; performance and
+    # 20-minute checkpoint behavior remain unchanged.
+    reserved_short = min(4, max(0, budget // 4))
+    to_verify = short_candidates[:reserved_short]
     repeat_indices = [i for i, issue in enumerate(result)
                       if issue.get('kind') == 'repeat' and effective_severity(issue) == 'high']
-    to_verify = repeat_indices[:max(0, budget // 3)]
+    to_verify.extend(i for i in repeat_indices[:max(0, budget // 3)]
+                     if i not in to_verify and len(to_verify) < budget)
     to_verify.extend(i for i in prioritize_rechecks(result, max(0, budget))
                      if i not in to_verify and len(to_verify) < budget)
-    # Even single-word substitutions can alter the book's meaning. The old
-    # high-priority filter hid them all; include distinct one-word candidates
-    # for independent confirmation, without promoting similar spellings.
-    if len(to_verify) < budget:
-        for i, issue in enumerate(result):
-            if i in to_verify or issue.get('kind') != 'replacement':
-                continue
-            spoken, expected = issue.get('spoken', ''), issue.get('expected', '')
-            if (len(tokenize(spoken)) == len(tokenize(expected)) == 1
-                    and not low_value_difference(spoken, expected)):
-                to_verify.append(i)
-            if len(to_verify) >= budget:
-                break
+    # Fill spare slots with remaining distinctive single-word candidates.
+    to_verify.extend(i for i in short_candidates
+                     if i not in to_verify and len(to_verify) < budget)
     to_verify.sort(key=lambda i: float(result[i].get('start', 0)))
     for i in to_verify:
         if should_stop and should_stop():

@@ -176,8 +176,10 @@ def low_value_difference(spoken: str, expected: str) -> bool:
             return True
         if a in IMPORTANT_SHORT or b in IMPORTANT_SHORT:
             return False
-        if max(len(a), len(b)) <= 3:
-            return True
+        # Do NOT discard short words wholesale. A one-letter change can alter
+        # meaning ("дом/дым", "мир/тир", "он/она"). These remain REVIEW
+        # candidates; only independent contextual corroboration may promote
+        # one into the main report. Previous code silently skipped rechecking.
         if min(len(a), len(b)) >= 5 and _edit_distance(a, b) <= 2:
             return True
         if min(len(a), len(b)) >= 7 and _edit_distance(a, b) <= 3 and SequenceMatcher(None, a, b).ratio() >= .87:

@@ -24,7 +24,7 @@ contract = load('verify_release_contract')
 
 class ReleaseIntegrityTests(unittest.TestCase):
     def test_tag_matches_real_release_workflow(self):
-        self.assertEqual(contract.check(), 'v0.9.1-beta.1')
+        self.assertEqual(contract.check(), 'v1.0.0-rc.1')
 
     def test_tamper_detected_without_overwriting_sidecar(self):
         with tempfile.TemporaryDirectory() as d:

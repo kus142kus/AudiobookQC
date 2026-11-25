@@ -284,8 +284,12 @@ def _build_doc(title: str, subtitle: str, rows: list[dict], metadata: dict,
        'Все замечания требуют проверки на слух.',
        size=8.4, color='muted', after=3)
     if metadata.get('dual_mode') and metadata.get('not_rechecked'):
-        _p(d, f'Не прошли вторую речевую модель: {metadata["not_rechecked"]}. '
-           'Они сохранены в полном журнале, не удалены.',
+        _p(d, f'Не проверялись второй речевой моделью: {metadata["not_rechecked"]}. '
+           'Это НЕ означает, что ошибки отсутствуют: кандидаты доступны в разделе «Показывать сомнительные».',
+           size=8.3, color='amber_text', after=3)
+    if metadata.get('dual_mode') and metadata.get('dual_unconfirmed'):
+        _p(d, f'Проверены, но не получили независимого подтверждения: {metadata["dual_unconfirmed"]}. '
+           'Результаты доступны для прослушивания в приложении.',
            size=8.3, color='amber_text', after=3)
 
     section_no = 1
@@ -376,6 +380,8 @@ def generate_report(path: Path, project: dict, issues: list[dict], start: float,
         'total': len(issues),
         'dual_mode': project.get('report_policy') == 'dual-gigaam',
         'not_rechecked': sum(i.get('kind') in READING_KINDS and not i.get('dual_checked') for i in issues),
+        'dual_unconfirmed': sum(bool(i.get('kind') in READING_KINDS and i.get('dual_checked')
+                                      and not i.get('dual_confirmed')) for i in issues),
         'uncertain': sum(i.get('kind') == 'uncertain' for i in issues),
     }, advisory=advisory)
     tmp = path.with_suffix('.pending.docx')
