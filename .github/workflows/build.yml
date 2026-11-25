@@ -1,4 +1,4 @@
-name: Audiobook QC 0.9 - offline release assets
+name: Audiobook QC 1.0 RC - offline release assets
 
 on:
   workflow_dispatch:
@@ -46,6 +46,9 @@ jobs:
       - name: Verify actual runner OS and architecture BEFORE costly setup
         shell: bash
         run: python scripts/check_ci_platform.py "${{ matrix.target }}"
+      - name: Validate release contract BEFORE installing large dependencies
+        shell: bash
+        run: python scripts/verify_release_contract.py
       - name: Prefer CPU-only PyTorch on Windows to avoid GPU/CUDA bundles
         if: runner.os == 'Windows'
         shell: bash
@@ -312,6 +315,10 @@ jobs:
           pattern: AQC-*
           merge-multiple: true
           path: release
+      - name: Resolve release tag from installer (single source of truth)
+        id: release_version
+        shell: bash
+        run: python scripts/verify_release_contract.py --github-output
       - name: Verify build-produced checksums WITHOUT rewriting them
         shell: bash
         run: |
@@ -321,9 +328,9 @@ jobs:
       - name: Publish GitHub public prerelease with direct EXE and DMG links
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.9.1-beta.1
+          tag_name: ${{ steps.release_version.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: Audiobook QC 0.9.1 Beta — Windows & macOS Apple Silicon
+          name: Audiobook QC 1.0 RC — Windows & macOS Apple Silicon
           body_path: docs/RELEASE_BETA.md
           draft: false
           prerelease: true
