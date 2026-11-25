@@ -16,17 +16,51 @@ from audiobook_qc.dual_engine import check_model_hash, load_secondary_model
 
 class PlatformPreviewRegressions(unittest.TestCase):
     def test_windows_arm_preview_accepts_inno_x86_stub(self):
-        wf = (ROOT/'.github/workflows/platform-matrix-preview.yml').read_text()
+        wf = (ROOT/'.github/workflows/platform-matrix-preview.yml').read_text(encoding='utf-8')
         self.assertIn('0x014c, 0x8664', wf)
         self.assertIn('not proof of payload architecture', wf)
         self.assertNotIn('if ($machine -ne 0x8664)', wf)
 
     def test_linux_jobs_install_portaudio_before_source_tests(self):
+        setup = (ROOT/'scripts/linux_ci_runtime.sh').read_text(encoding='utf-8')
+        for library in ('libportaudio2','libminizip1t64','libxcb-cursor0'):
+            self.assertIn(library, setup)
         for name in ('platform-matrix-preview.yml','linux-preview.yml','linux-arm64-preview.yml'):
             with self.subTest(name=name):
-                text = (ROOT/'.github/workflows'/name).read_text()
-                self.assertIn('libportaudio2', text)
-                self.assertLess(text.find('libportaudio2'),text.find('python -m unittest'))
+                text = (ROOT/'.github/workflows'/name).read_text(encoding='utf-8')
+                self.assertIn('bash scripts/linux_ci_runtime.sh', text)
+                self.assertLess(text.find('bash scripts/linux_ci_runtime.sh'),
+                                text.find('python -m unittest'))
+                self.assertIn('python scripts/diagnose_linux_qt.py; exit 1;', text)
+
+    def test_converter_numpy_preflight_is_real_and_early(self):
+        workflow=(ROOT/'.github/workflows/platform-matrix-preview.yml').read_text(encoding='utf-8')
+        self.assertIn("'numpy==1.26.4'", workflow)
+        self.assertIn('python scripts/preflight_safe_conversion.py', workflow)
+        self.assertLess(workflow.find('python scripts/preflight_safe_conversion.py'),
+                        workflow.find('python scripts/get_offline_model.py --gigaam-only'))
+        code=(ROOT/'scripts/preflight_safe_conversion.py').read_text(encoding='utf-8')
+        self.assertIn('save_file(weights, str(path))', code)
+        self.assertIn('load_file(str(path)', code)
+
+    def test_whisper_is_downloaded_before_entering_offline_mode(self):
+        workflow=(ROOT/'.github/workflows/platform-matrix-preview.yml').read_text(encoding='utf-8')
+        snippet=workflow.split('name: Download Whisper online, then verify GigaAM STRICTLY offline',1)[1].split('      - name:',1)[0]
+        self.assertIn('python scripts/get_offline_model.py --whisper-only',snippet)
+        self.assertLess(snippet.index('python scripts/get_offline_model.py --whisper-only'),
+                        snippet.index('export HF_HUB_OFFLINE=1'))
+        self.assertLess(snippet.index('python scripts/get_event_model.py'),
+                        snippet.index('export HF_HUB_OFFLINE=1'))
+        self.assertNotIn('env:', snippet.split('run: |',1)[0])
+
+    def test_platform_checks_always_read_utf8(self):
+        import ast
+        code=Path(__file__).read_text(encoding='utf-8')
+        tree=ast.parse(code)
+        for call in ast.walk(tree):
+            if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and call.func.attr == 'read_text':
+                self.assertTrue(call.args or any(kw.arg == 'encoding' for kw in call.keywords),
+                                'read_text() must specify UTF-8 on Windows')
 
     def test_clip_player_stop_without_portaudio_does_not_crash(self):
         from audiobook_qc.desktop import ClipPlayer
@@ -46,7 +80,7 @@ class PlatformPreviewRegressions(unittest.TestCase):
             player.stop()
 
     def test_intel_preview_uses_safe_artifact_not_vulnerable_bin_loading(self):
-        wf=(ROOT/'.github/workflows/platform-matrix-preview.yml').read_text()
+        wf=(ROOT/'.github/workflows/platform-matrix-preview.yml').read_text(encoding='utf-8')
         self.assertIn('intel-safe-gigaam:',wf)
         self.assertIn('convert_gigaam_safetensors.py',wf)
         self.assertIn('name: AQC-Intel-GigaAM-SAFE',wf)
@@ -112,7 +146,7 @@ class PlatformPreviewRegressions(unittest.TestCase):
             self.assertTrue(torch.equal(safetensors.torch.load_file(str(result))['layer.weight'], torch.arange(6).reshape(2,3).float()))
 
     def test_converter_never_allows_pickle_objects(self):
-        script=(ROOT/'scripts/convert_gigaam_safetensors.py').read_text()
+        script=(ROOT/'scripts/convert_gigaam_safetensors.py').read_text(encoding='utf-8')
         self.assertIn('weights_only=True',script)
         self.assertNotIn('weights_only=False',script)
         self.assertIn("Version('2.6')",script)
