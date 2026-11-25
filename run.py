@@ -57,6 +57,36 @@ def _audible_test_wav(path: Path, seconds: int = 3) -> None:
         wav.writeframes(samples.tobytes())
 
 
+def _verify_word_export() -> None:
+    """Test the same Word generator used for real 20-minute report exports.
+
+    Importing python-docx is insufficient: missing default-header.xml and
+    default-footer.xml only fail when a report accesses headers/footers.
+    Run this in the *frozen binary*, not only in source unit tests.
+    """
+    from tempfile import TemporaryDirectory
+    from docx import Document
+    from audiobook_qc.report import generate_report
+
+    _stage("Checking bundled Word templates by exporting a real DOCX")
+    with TemporaryDirectory(prefix="aqc-word-smoke-") as directory:
+        output = Path(directory) / "report.docx"
+        generate_report(
+            output,
+            {"audio_name": "smoke.wav", "text_name": "smoke.docx",
+             "report_policy": "dual-gigaam"},
+            [], 0.0, 10.0,
+        )
+        assert output.is_file() and output.stat().st_size > 1000, "Word report missing or empty"
+        document = Document(str(output))
+        assert document.paragraphs, "Word report was not readable"
+        assert document.sections[0].header.paragraphs, "Word header template failed"
+        assert document.sections[0].footer.paragraphs, "Word footer template failed"
+        assert any("Проверка озвучки" in p.text for p in document.paragraphs), \
+            "Generated Word report has no expected heading"
+    _stage("AUDIOBOOK_QC_WORD_REPORT_EXPORT_OK")
+
+
 def self_test() -> None:
     """Fast, bounded bundle integrity check. Does NOT load both ASR models."""
     offline_environment()
@@ -80,6 +110,7 @@ def self_test() -> None:
     from audiobook_qc.desktop_web import bundled_html
     html = bundled_html()
     assert "id=\"projectView\"" in html, "Desktop WebView interface missing"
+    _verify_word_export()
     _stage("AUDIOBOOK_QC_OFFLINE_BUNDLE_OK")
 
 
