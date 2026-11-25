@@ -1,0 +1,329 @@
+# Publish ALL tested AudiobookQC desktop packages with one GitHub Actions click.
+# Does not change the existing Windows/Apple Silicon build or preview workflows.
+# Reuses verified artifacts from a common source commit. If none are available,
+# runs both build workflows on the current main commit and checks their results.
+name: Publish AudiobookQC - Windows macOS Linux
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: audiobookqc-all-platforms-release
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Find or build matching tested assets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    outputs:
+      source_sha: ${{ steps.pair.outputs.source_sha }}
+      core_run_id: ${{ steps.pair.outputs.core_run_id }}
+      preview_run_id: ${{ steps.pair.outputs.preview_run_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve matching successful builds (automatically build if needed)
+        id: pair
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST_SHA: ${{ github.sha }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          python - <<'PY'
+          import json, os, subprocess, time
+
+          repo = os.environ['GH_REPO']
+          requested_sha = os.environ['REQUEST_SHA']
+          required = {
+              'build.yml': {'AQC-Setup', 'AQC-Model', 'AQC-Mac-M4'},
+              'platform-matrix-preview.yml': {
+                  'AQC-Linux-x64-PREVIEW', 'AQC-Linux-ARM64-PREVIEW',
+                  'AQC-Mac-Intel-PREVIEW'},
+          }
+
+          def gh(*args):
+              p = subprocess.run(['gh', *map(str, args)], text=True,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+              if p.returncode:
+                  raise RuntimeError(f'GitHub command failed: {args}: {p.stderr[-3000:]}')
+              return p.stdout
+
+          def api(path):
+              return json.loads(gh('api', path))
+
+          def runs(workflow):
+              result = api(f'repos/{repo}/actions/workflows/{workflow}/runs'
+                           '?branch=main&status=success&per_page=100')
+              return [r for r in result['workflow_runs']
+                      if r['conclusion'] == 'success' and r['head_branch'] == 'main']
+
+          def has_assets(run_id, workflow):
+              data = api(f'repos/{repo}/actions/runs/{run_id}/artifacts?per_page=100')
+              available = {a['name'] for a in data['artifacts'] if not a['expired']}
+              return required[workflow] <= available
+
+          def existing_pair():
+              core = runs('build.yml')
+              preview = runs('platform-matrix-preview.yml')
+              for candidate in preview:
+                  sha = candidate['head_sha']
+                  for baseline in core:
+                      if baseline['head_sha'] != sha:
+                          continue
+                      if (has_assets(baseline['id'], 'build.yml') and
+                              has_assets(candidate['id'], 'platform-matrix-preview.yml')):
+                          return sha, baseline['id'], candidate['id']
+              return None
+
+          pair = existing_pair()
+          if pair is None:
+              # A publication must never combine different code revisions.
+              actual_main_sha = api(f'repos/{repo}/commits/main')['sha']
+              if actual_main_sha != requested_sha:
+                  raise RuntimeError('main changed while preparing publication. Re-run this workflow.')
+              print('No matching non-expired build pair; starting BOTH workflows on main.', flush=True)
+
+              def dispatch_and_wait(workflow, inputs=None):
+                  path = f'repos/{repo}/actions/workflows/{workflow}/runs?branch=main&per_page=100'
+                  before = {r['id'] for r in api(path)['workflow_runs']}
+                  args = ['workflow', 'run', workflow, '--ref', 'main']
+                  for key, value in (inputs or {}).items():
+                      args.extend(['-f', f'{key}={value}'])
+                  gh(*args)
+                  deadline = time.monotonic() + 115 * 60
+                  chosen = None
+                  while time.monotonic() < deadline:
+                      listing = api(path)['workflow_runs']
+                      if chosen is None:
+                          candidates = [r for r in listing
+                                        if r['id'] not in before and
+                                        r['head_sha'] == requested_sha and
+                                        r['event'] == 'workflow_dispatch']
+                          if candidates:
+                              chosen = max(candidates, key=lambda r: r['id'])['id']
+                              print(f'{workflow}: new GitHub run {chosen}', flush=True)
+                      if chosen:
+                          state = api(f'repos/{repo}/actions/runs/{chosen}')
+                          if state['status'] == 'completed':
+                              if state['conclusion'] != 'success':
+                                  raise RuntimeError(f'{workflow} #{chosen} failed: '
+                                      f'https://github.com/{repo}/actions/runs/{chosen}')
+                              if not has_assets(chosen, workflow):
+                                  raise RuntimeError(f'{workflow} #{chosen} succeeded but required assets '
+                                                     'are missing or expired')
+                              return chosen
+                      time.sleep(35)
+                  raise TimeoutError(f'{workflow} did not complete within 115 minutes. '
+                                     'Check GitHub Actions and retry this publication.')
+
+              core_id = dispatch_and_wait('build.yml', {'publish_beta': 'false'})
+              preview_id = dispatch_and_wait('platform-matrix-preview.yml',
+                                             {'windows_x64_run_id': str(core_id)})
+              pair = requested_sha, core_id, preview_id
+
+          sha, core_id, preview_id = pair
+          print(f'RELEASE_SOURCE_OK SHA={sha} build={core_id} preview={preview_id}', flush=True)
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
+              f.write(f'source_sha={sha}\ncore_run_id={core_id}\npreview_run_id={preview_id}\n')
+          PY
+
+  draft:
+    name: Prepare hidden prerelease
+    needs: resolve
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.source_sha }}
+      - name: Resolve tag from SAME commit as binaries
+        id: version
+        run: python scripts/verify_release_contract.py --github-output
+      - name: Create hidden release (never publish partial packages)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          SHA: ${{ needs.resolve.outputs.source_sha }}
+        run: |
+          cat > "$RUNNER_TEMP/aqc-release-notes.md" <<'NOTES'
+          # AudiobookQC - cross-platform release candidate
+
+          An **experimental prerelease**, not a verified stable 1.0.
+
+          | System | Download | Status |
+          | --- | --- | --- |
+          | Windows 10/11 x64 | `AQC-Setup.exe` | Automated build and install tests |
+          | macOS Apple Silicon (M1 and newer) | `AudiobookQC-Mac.dmg` | Automated build and DMG validation |
+          | macOS Intel | `AudiobookQC-Mac-Intel-PREVIEW.dmg` | Experimental CI-tested build |
+          | Linux x64 | `AudiobookQC-Linux-x64-PREVIEW.tar.gz` | Experimental portable archive |
+          | Linux ARM64 | `AudiobookQC-Linux-ARM64-PREVIEW.tar.gz` | Experimental portable archive |
+
+          Windows setup downloads its verified `AQC-Model.zip` automatically during installation.
+          The model ZIP is included as a support asset; users normally need only the EXE.
+          Windows ARM64 was tested **only** for the x64 installer loader under emulation,
+          not for complete audiobook processing. A native ARM64 release does not exist.
+
+          Windows and Mac packages are installers; Linux packages are extracted portable
+          archives. Mac binaries are not guaranteed to be signed or notarized.
+          Do not treat ASR findings as automatically proven errors: listen to flagged audio.
+          NOTES
+          # The release tag must reference the binaries' source commit, not this new workflow commit.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            draft=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')
+            test "$draft" = true || { echo "Release $TAG is already public; refusing to overwrite it" >&2; exit 1; }
+            ref_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.sha')
+            test "$ref_sha" = "$SHA" || { echo "Existing tag $TAG points to a different commit" >&2; exit 1; }
+            echo "Resuming existing hidden draft release $TAG"
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$SHA" \
+              --title "AudiobookQC $TAG - Windows, macOS, Linux (preview)" \
+              --notes-file "$RUNNER_TEMP/aqc-release-notes.md" --draft --prerelease
+          fi
+
+  upload:
+    name: Verify and upload ${{ matrix.artifact }}
+    needs: [resolve, draft]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - artifact: AQC-Setup
+            group: core
+            filename: AQC-Setup.exe
+          - artifact: AQC-Model
+            group: core
+            filename: AQC-Model.zip
+          - artifact: AQC-Mac-M4
+            group: core
+            filename: AudiobookQC-Mac.dmg
+          - artifact: AQC-Mac-Intel-PREVIEW
+            group: preview
+            filename: AudiobookQC-Mac-Intel-PREVIEW.dmg
+          - artifact: AQC-Linux-x64-PREVIEW
+            group: preview
+            filename: AudiobookQC-Linux-x64-PREVIEW.tar.gz
+          - artifact: AQC-Linux-ARM64-PREVIEW
+            group: preview
+            filename: AudiobookQC-Linux-ARM64-PREVIEW.tar.gz
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.source_sha }}
+      - name: Fetch exact tested artifact from matching run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CORE_RUN: ${{ needs.resolve.outputs.core_run_id }}
+          PREVIEW_RUN: ${{ needs.resolve.outputs.preview_run_id }}
+          ARTIFACT: ${{ matrix.artifact }}
+          GROUP: ${{ matrix.group }}
+        run: |
+          if [ "$GROUP" = core ]; then run_id="$CORE_RUN"; else run_id="$PREVIEW_RUN"; fi
+          mkdir -p "$RUNNER_TEMP/aqc-asset"
+          gh run download "$run_id" -R "$GITHUB_REPOSITORY" \
+            -n "$ARTIFACT" -D "$RUNNER_TEMP/aqc-asset"
+      - name: Verify exact original SHA256 and GitHub asset size
+        shell: bash
+        env:
+          FILENAME: ${{ matrix.filename }}
+        run: |
+          python - <<'PY'
+          import hashlib, os, pathlib, tarfile
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'aqc-asset'
+          name = os.environ['FILENAME']
+          binary = root / name
+          sidecar = root / (name + '.sha256')
+          assert binary.is_file() and sidecar.is_file(), f'Missing tested binary or checksum: {name}'
+          size = binary.stat().st_size
+          if not 0 < size < 2 * 1024**3:
+              raise ValueError(f'{name} has {size} bytes; GitHub Releases requires each asset < 2 GiB')
+          with binary.open('rb') as stream:
+              digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+          expected = f'{digest}  {name}\n'
+          if sidecar.read_text(encoding='ascii') != expected:
+              raise ValueError(f'Original SHA256 checksum mismatch: {name}')
+          if name.endswith('.tar.gz'):
+              with tarfile.open(binary, mode='r:gz') as bundle:
+                  members = bundle.getmembers()
+                  paths = [m.name for m in members]
+                  if 'AudiobookQC/AudiobookQC' not in paths:
+                      raise ValueError('Linux archive has no AudiobookQC executable')
+                  for member in members:
+                      p = pathlib.PurePosixPath(member.name)
+                      if p.is_absolute() or '..' in p.parts or p.parts[0] != 'AudiobookQC':
+                          raise ValueError(f'Unexpected Linux archive member {member.name}')
+          else:
+              # Existing project verifier validates ZIP entries, EXE signature and DMG size.
+              import subprocess, sys
+              subprocess.run([sys.executable, 'scripts/check_release_assets.py', '--verify',
+                              str(binary)], check=True)
+          print('VERIFIED_FOR_PUBLIC_RELEASE', name, size, digest, flush=True)
+          PY
+      - name: Upload verified package to HIDDEN draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.draft.outputs.tag }}
+          FILENAME: ${{ matrix.filename }}
+        run: |
+          test "$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = true
+          gh release upload "$TAG" \
+            "$RUNNER_TEMP/aqc-asset/$FILENAME" \
+            "$RUNNER_TEMP/aqc-asset/$FILENAME.sha256" \
+            -R "$GITHUB_REPOSITORY" --clobber
+
+  publish:
+    name: Publish ONLY after all six platform assets uploaded
+    needs: [resolve, draft, upload]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Verify all 12 release assets then make public
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.draft.outputs.tag }}
+          SHA: ${{ needs.resolve.outputs.source_sha }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > "$RUNNER_TEMP/aqc-release.json"
+          python - <<'PY'
+          import json, os, pathlib
+          p = pathlib.Path(os.environ['RUNNER_TEMP'])/'aqc-release.json'
+          release = json.loads(p.read_text(encoding='utf-8'))
+          tag = os.environ['TAG']
+          sha = os.environ['SHA']
+          if not release['draft'] or not release['prerelease']:
+              raise ValueError('Refusing to publish: release was not a private prerelease draft')
+          if release.get('target_commitish') != sha:
+              raise ValueError('Release target SHA changed, publication blocked')
+          binaries = [
+              'AQC-Setup.exe', 'AQC-Model.zip', 'AudiobookQC-Mac.dmg',
+              'AudiobookQC-Mac-Intel-PREVIEW.dmg',
+              'AudiobookQC-Linux-x64-PREVIEW.tar.gz',
+              'AudiobookQC-Linux-ARM64-PREVIEW.tar.gz',
+          ]
+          wanted = set(binaries + [p+'.sha256' for p in binaries])
+          found = {a['name']: a for a in release['assets']}
+          if set(found) != wanted:
+              raise ValueError(f'Release incomplete: missing={wanted-set(found)} extra={set(found)-wanted}')
+          for name, item in found.items():
+              if item['state'] != 'uploaded' or item['size'] <= 0 or item['size'] >= 2*1024**3:
+                  raise ValueError(f'Invalid uploaded release asset: {name}')
+          print('ALL_SIX_PLATFORMS_VERIFIED_RELEASE_READY', tag, sha, flush=True)
+          PY
+          release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.id')
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+            -F draft=false -F prerelease=true >/dev/null
+          echo "Published all six binaries to https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
