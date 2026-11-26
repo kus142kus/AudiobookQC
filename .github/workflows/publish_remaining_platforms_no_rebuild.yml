@@ -1,4 +1,6 @@
-# AudiobookQC: add verified Windows/Linux/Intel artifacts to the already published Mac M4 prerelease.
+# AudiobookQC: publish verified artifacts without rebuilding apps. Oversized Linux packages
+# are published in checksum-verified chunks with one small Linux installer script.
+# Windows pinned-model conflicts are NEVER silently overwritten.
 # No applications are rebuilt. Never combines binaries from different source commits.
 name: Publish remaining AudiobookQC platforms (no rebuild)
 
@@ -29,7 +31,7 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
-          import hashlib, json, os, pathlib, re, subprocess, tempfile
+          import hashlib, json, os, pathlib, re, shutil, subprocess, tempfile
 
           repo = os.environ['GH_REPO']
           tag = os.environ['TARGET_TAG']
@@ -119,8 +121,8 @@ jobs:
               match = re.fullmatch(r'([0-9a-f]{64})\s+\*?(\S+)', sidecar.read_text('utf-8').strip())
               if not match or pathlib.PurePosixPath(match.group(2).replace('\\', '/')).name != path.name:
                   raise RuntimeError(f'Bad original SHA-256 sidecar for {path.name}')
-              if path.stat().st_size >= 2*1024**3 or path.stat().st_size == 0:
-                  raise RuntimeError(f'{path.name} exceeds 2 GiB GitHub Releases limit or is empty')
+              if path.stat().st_size == 0:
+                  raise RuntimeError(f'{path.name} is empty')
               digest = digest_file(path)
               if digest != match.group(1):
                   raise RuntimeError(f'SHA-256 verification FAILED: {path.name}')
@@ -145,6 +147,8 @@ jobs:
               return file
 
           def upload_or_check(release_tag, file):
+              if file.stat().st_size >= 2 * 1024**3:
+                  raise RuntimeError(f'{file.name} cannot be uploaded as one asset (>= 2 GiB)')
               current = release(release_tag)
               listed = names(current)
               pair = {file.name, file.name + '.sha256'}
@@ -160,10 +164,96 @@ jobs:
               gh('release', 'upload', release_tag, str(file), str(file)+'.sha256', '-R', repo, capture=False)
               return 'published'
 
+          def write_checked(path, content):
+              path.write_bytes(content)
+              digest = digest_file(path)
+              pathlib.Path(str(path) + '.sha256').write_text(
+                  f'{digest}  {path.name}\n', encoding='ascii')
+              return digest
+
+          def publish_linux_package(path):
+              # GitHub Releases allows each asset to be < 2 GiB, regardless of
+              # the total release size. Keep the original VERIFIED tar.gz intact
+              # and split by bytes, never by tar entries or model files.
+              ceiling = 2 * 1024**3
+              if path.stat().st_size < ceiling:
+                  return upload_or_check(tag, path)
+              chunk_size = 1_500_000_000
+              parts = []
+              with path.open('rb') as stream:
+                  number = 1
+                  while True:
+                      part = path.parent / f'{path.name}.part{number:02d}'
+                      remaining = chunk_size
+                      written = 0
+                      with part.open('wb') as output:
+                          while remaining:
+                              block = stream.read(min(8 * 1024**2, remaining))
+                              if not block:
+                                  break
+                              output.write(block)
+                              written += len(block)
+                              remaining -= len(block)
+                      if written == 0:
+                          part.unlink()
+                          break
+                      digest = digest_file(part)
+                      pathlib.Path(str(part) + '.sha256').write_text(
+                          f'{digest}  {part.name}\n', encoding='ascii')
+                      parts.append((part, digest))
+                      number += 1
+              if len(parts) < 2:
+                  raise RuntimeError('Expected multiple parts for oversized Linux tarball')
+
+              base = f'https://github.com/{repo}/releases/download/{tag}'
+              setup_name = path.name.replace('.tar.gz', '-INSTALL.sh')
+              setup = path.parent / setup_name
+              app_sha = digest_file(path)
+              lines = [
+                  '#!/usr/bin/env bash',
+                  'set -euo pipefail',
+                  '# AudiobookQC Linux: offline after the first download.',
+                  'command -v curl >/dev/null || { echo "curl is required" >&2; exit 1; }',
+                  'command -v sha256sum >/dev/null || { echo "sha256sum is required" >&2; exit 1; }',
+                  'command -v tar >/dev/null || { echo "tar is required" >&2; exit 1; }',
+                  'work="$(mktemp -d)"',
+                  """trap 'rm -rf "$work"' EXIT""",
+                  'cd "$work"',
+              ]
+              for part, sha in parts:
+                  lines += [
+                      f'echo "Downloading {part.name}"',
+                      f'curl --fail --location --retry 3 --output "{part.name}" "{base}/{part.name}"',
+                      f"""printf '%s  %s\\n' "{sha}" "{part.name}" | sha256sum --check --status""",
+                  ]
+              files=' '.join('"'+part.name+'"' for part, _ in parts)
+              lines += [
+                  f'cat {files} > "{path.name}"',
+                  f"""printf '%s  %s\\n' "{app_sha}" "{path.name}" | sha256sum --check --status""",
+                  'install_root="$HOME/.local/opt"',
+                  'mkdir -p "$install_root"',
+                  f'tar -xzf "{path.name}" -C "$install_root"',
+                  'test -x "$install_root/AudiobookQC/AudiobookQC" || { echo "Executable missing" >&2; exit 1; }',
+                  'mkdir -p "$HOME/.local/share/applications"',
+                  """printf '[Desktop Entry]\\nType=Application\\nName=AudiobookQC\\nExec=%s/AudiobookQC/AudiobookQC\\nTerminal=false\\nCategories=AudioVideo;Utility;\\n' "$install_root" > "$HOME/.local/share/applications/AudiobookQC.desktop\"""",
+                  'echo "AudiobookQC installed. Open it from the applications menu."',
+              ]
+              write_checked(setup, ('\n'.join(lines)+'\n').encode('utf-8'))
+              setup.chmod(0o755)
+              results = []
+              for part, _ in parts:
+                  results.append(upload_or_check(tag, part))
+              results.append(upload_or_check(tag, setup))
+              return f'{len(parts)} verified chunks + installer {setup_name}: ' + ', '.join(results)
+
           summary = []
           with tempfile.TemporaryDirectory(prefix='aqc-remaining-') as temp:
               root = pathlib.Path(temp)
               for platform, opts in specs.items():
+                  # Release large temporary packages promptly (Linux can exceed 2 GiB).
+                  for leftover in root.iterdir():
+                      if leftover.is_dir():
+                          shutil.rmtree(leftover)
                   match = candidate(opts)
                   if match is None:
                       summary.append((platform, 'NOT PUBLISHED: no passing, non-expired artifact for EXACT Mac source SHA'))
@@ -189,27 +279,41 @@ jobs:
                           upload_or_check(tag, model)
                           result = f'{setup_result}; model at pinned tag: {model_result}'
                       else:
-                          result = ', '.join(upload_or_check(tag, f) for f in files)
+                          result = ', '.join(publish_linux_package(f) if platform.startswith('Linux ')
+                                             else upload_or_check(tag, f) for f in files)
                       summary.append((platform, f'OK: {result}; source {source[:10]}'))
                   except Exception as exc:
                       summary.append((platform, f'NOT PUBLISHED: {exc}'))
 
-          if all(status.startswith('OK:') for _, status in summary):
-              body = target.get('body', '')
+          # Publish release notes for the successfully added systems even when
+          # the old Windows model is incompatible. Do not claim Windows works.
+          good = {name for name, result in summary if result.startswith('OK:')}
+          if {'Linux x64', 'Linux ARM64', 'Mac Intel'} <= good:
+              body = target.get('body') or ''
               marker = '\n\n---\n\n### Additional tested platform packages\n'
-              body = body.split(marker)[0] + marker + (
-                  'Windows x64 (`AQC-Setup.exe`, with the pinned model archive), '
-                  'experimental Mac Intel (`AudiobookQC-Mac-Intel-PREVIEW.dmg`), '
-                  'Linux x64 and Linux ARM64 (`.tar.gz` archives). '
-                  'Windows ARM64 uses x64 emulation only; native support is not tested. '
-                  'End-user functionality must still be tested on physical computers.\n'
+              if marker in body:
+                  body = body.split(marker)[0]
+              windows_ready = 'Windows x64' in good
+              body += marker + (
+                  '- macOS Apple Silicon: existing tested DMG.\n'
+                  '- macOS Intel: experimental DMG, verified by CI.\n'
+                  '- Linux x64 / ARM64: download the matching `-INSTALL.sh` and run\n'
+                  '  `bash ./AudiobookQC-Linux-x64-PREVIEW-INSTALL.sh` or\n'
+                  '  `bash ./AudiobookQC-Linux-ARM64-PREVIEW-INSTALL.sh`.\n'
+                  '  The installer downloads large verified archive parts automatically.\n'
+                  + ('- Windows x64: verified setup and matching model archive are published.\n'
+                     if windows_ready else
+                     '- Windows x64: NOT published in this update: existing pinned model conflicts.\n'
+                     '  A separately rebuilt installer with a unique model URL is required.\n')
+                  + 'These are release candidates; physical-computer testing remains necessary.\n'
               )
               with tempfile.NamedTemporaryFile('w', suffix='.md', encoding='utf-8', delete=False) as notes:
                   notes.write(body)
                   notes_path = notes.name
               try:
-                  gh('release', 'edit', tag, '-R', repo, '--title',
-                     'AudiobookQC RC2 — Windows, macOS and Linux previews',
+                  title = ('AudiobookQC RC2 — Windows, macOS and Linux previews'
+                           if windows_ready else 'AudiobookQC RC2 — macOS and Linux previews')
+                  gh('release', 'edit', tag, '-R', repo, '--title', title,
                      '--notes-file', notes_path, capture=False)
               finally:
                   pathlib.Path(notes_path).unlink(missing_ok=True)
@@ -225,6 +329,14 @@ jobs:
                   f.write(f'Existing Mac M4 release: https://github.com/{repo}/releases/tag/{tag}\n\n')
                   f.write('\n'.join(summary_lines)+'\n\n')
                   f.write('No rebuilds performed. All copied assets must match Mac M4 source commit. Windows ARM64 is x64 emulation only.\n')
-          if any(not status.startswith('OK:') for _, status in summary):
-              raise SystemExit('INCOMPLETE: see the platform-by-platform summary above. Already verified assets remain published.')
+          failed = [(name, status) for name, status in summary if not status.startswith('OK:')]
+          for name, status in failed:
+              print(f'::warning title={name} not published::{status[:500]}', flush=True)
+          # A Windows installer with a mismatched pinned model cannot be repaired
+          # by copying assets. Do not mask failures for OTHER platforms.
+          serious = [(name, status) for name, status in failed if name != 'Windows x64']
+          if serious:
+              raise SystemExit('INCOMPLETE: see the platform-by-platform summary; uploaded assets remain intact.')
+          if failed:
+              print('WINDOWS STILL NEEDS A MATCHING, REBUILT INSTALLER; no existing model assets were overwritten.', flush=True)
           PY
