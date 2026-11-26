@@ -1,0 +1,230 @@
+# AudiobookQC: add verified Windows/Linux/Intel artifacts to the already published Mac M4 prerelease.
+# No applications are rebuilt. Never combines binaries from different source commits.
+name: Publish remaining AudiobookQC platforms (no rebuild)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: aqc-existing-assets-publication
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Collect and publish verified platform assets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Publish only passing binaries from the Mac release source commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TARGET_TAG: v1.0.0-rc.2-m4.1
+          WINDOWS_MODEL_TAG: v1.0.0-rc.2
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, os, pathlib, re, subprocess, tempfile
+
+          repo = os.environ['GH_REPO']
+          tag = os.environ['TARGET_TAG']
+          model_tag = os.environ['WINDOWS_MODEL_TAG']
+
+          def gh(*args, capture=True, check=True):
+              p = subprocess.run(['gh', *map(str, args)], text=True, stdout=subprocess.PIPE if capture else None,
+                                 stderr=subprocess.PIPE if capture else None)
+              if check and p.returncode:
+                  raise RuntimeError(f'gh {" ".join(map(str,args))}: {p.stderr[-1200:] if p.stderr else "failed"}')
+              return p.stdout if capture else ''
+
+          def api(path):
+              return json.loads(gh('api', f'repos/{repo}/{path}'))
+
+          def release(name):
+              return json.loads(gh('release', 'view', name, '-R', repo, '--json', 'name,isDraft,assets,body'))
+
+          def names(data):
+              return {a['name'] for a in data['assets']}
+
+          target = release(tag)
+          if target['isDraft']:
+              raise RuntimeError(f'{tag} is not yet public; publish Mac M4 first')
+          if not {'AudiobookQC-Mac.dmg', 'AudiobookQC-Mac.dmg.sha256'} <= names(target):
+              raise RuntimeError('Target release lacks its tested Mac DMG and checksum')
+          source = api(f'git/ref/tags/{tag}')['object']['sha']
+          if not re.fullmatch(r'[0-9a-f]{40}', source):
+              raise RuntimeError('Unexpected source SHA for Mac release; review annotated tag manually')
+          print(f'AQC_SAME_SOURCE_REQUIRED {source}', flush=True)
+
+          specs = {
+              'Windows x64': [('build.yml', ('AQC-Setup', 'AQC-Model'), 'Offline Windows-x64')],
+              'Linux x64': [('linux-preview.yml', ('AQC-Linux-x64-PREVIEW',), None),
+                            ('platform-matrix-preview.yml', ('AQC-Linux-x64-PREVIEW',), 'Preview Linux-x64')],
+              'Linux ARM64': [('linux-arm64-preview.yml', ('AQC-Linux-ARM64-PREVIEW',), None),
+                              ('platform-matrix-preview.yml', ('AQC-Linux-ARM64-PREVIEW',), 'Preview Linux-ARM64')],
+              'Mac Intel': [('platform-matrix-preview.yml', ('AQC-Mac-Intel-PREVIEW',),
+                             'Experimental macOS Intel')],
+          }
+          filenames = {
+              'AQC-Setup': 'AQC-Setup.exe',
+              'AQC-Model': 'AQC-Model.zip',
+              'AQC-Linux-x64-PREVIEW': 'AudiobookQC-Linux-x64-PREVIEW.tar.gz',
+              'AQC-Linux-ARM64-PREVIEW': 'AudiobookQC-Linux-ARM64-PREVIEW.tar.gz',
+              'AQC-Mac-Intel-PREVIEW': 'AudiobookQC-Mac-Intel-PREVIEW.dmg',
+          }
+          cache = {}
+          def listing(workflow):
+              if workflow not in cache:
+                  cache[workflow] = api(f'actions/workflows/{workflow}/runs?branch=main&per_page=100')['workflow_runs']
+              return cache[workflow]
+
+          def has_job(run_id, startswith):
+              jobs = api(f'actions/runs/{run_id}/jobs?per_page=100')['jobs']
+              return any(j['name'].startswith(startswith) and j['conclusion'] == 'success' for j in jobs)
+
+          def candidate(options):
+              for workflow, required, job in options:
+                  for run in listing(workflow):
+                      if run['head_sha'] != source or run['head_branch'] != 'main':
+                          continue
+                      if run['status'] != 'completed':
+                          continue
+                      if job is None and run['conclusion'] != 'success':
+                          continue
+                      art = api(f'actions/runs/{run["id"]}/artifacts?per_page=100')['artifacts']
+                      available = {a['name'] for a in art if not a['expired']}
+                      if not set(required) <= available:
+                          continue
+                      if job and not has_job(run['id'], job):
+                          continue
+                      return (run['id'], required, workflow)
+              return None
+
+          def digest_file(path):
+              h = hashlib.sha256()
+              with path.open('rb') as f:
+                  for block in iter(lambda: f.read(8*1024*1024), b''):
+                      h.update(block)
+              return h.hexdigest()
+
+          def verify_file(path):
+              sidecar = pathlib.Path(str(path) + '.sha256')
+              if not path.is_file() or not sidecar.is_file():
+                  raise RuntimeError(f'Missing original archive or SHA-256: {path.name}')
+              match = re.fullmatch(r'([0-9a-f]{64})\s+\*?(\S+)', sidecar.read_text('utf-8').strip())
+              if not match or pathlib.PurePosixPath(match.group(2).replace('\\', '/')).name != path.name:
+                  raise RuntimeError(f'Bad original SHA-256 sidecar for {path.name}')
+              if path.stat().st_size >= 2*1024**3 or path.stat().st_size == 0:
+                  raise RuntimeError(f'{path.name} exceeds 2 GiB GitHub Releases limit or is empty')
+              digest = digest_file(path)
+              if digest != match.group(1):
+                  raise RuntimeError(f'SHA-256 verification FAILED: {path.name}')
+              return digest
+
+          def fetch(run_id, artifact, destination):
+              folder = destination / artifact
+              folder.mkdir(parents=True, exist_ok=True)
+              gh('run', 'download', str(run_id), '-R', repo, '-n', artifact, '-D', folder, capture=False)
+              file = folder / filenames[artifact]
+              verify_file(file)
+              if file.name.endswith('.tar.gz'):
+                  import tarfile
+                  with tarfile.open(file, 'r:gz') as t:
+                      members = t.getmembers()
+                      if not any(m.name in ('AudiobookQC/AudiobookQC', './AudiobookQC/AudiobookQC') for m in members):
+                          raise RuntimeError(f'{file.name} lacks the Linux executable')
+                      for m in members:
+                          p = pathlib.PurePosixPath(m.name)
+                          if p.is_absolute() or '..' in p.parts:
+                              raise RuntimeError(f'Unsafe tar path: {m.name}')
+              return file
+
+          def upload_or_check(release_tag, file):
+              current = release(release_tag)
+              listed = names(current)
+              pair = {file.name, file.name + '.sha256'}
+              if pair <= listed:
+                  with tempfile.TemporaryDirectory() as tmp:
+                      gh('release', 'download', release_tag, '-R', repo, '-p', file.name+'.sha256', '-D', tmp, capture=False)
+                      original = (pathlib.Path(tmp)/(file.name+'.sha256')).read_text('utf-8').split()[0]
+                      if original != digest_file(file):
+                          raise RuntimeError(f'Existing release checksum conflicts: {release_tag}/{file.name}; will NOT overwrite')
+                  return 'already published'
+              if pair & listed:
+                  raise RuntimeError(f'Partial conflicting assets already exist: {release_tag}/{file.name}')
+              gh('release', 'upload', release_tag, str(file), str(file)+'.sha256', '-R', repo, capture=False)
+              return 'published'
+
+          summary = []
+          with tempfile.TemporaryDirectory(prefix='aqc-remaining-') as temp:
+              root = pathlib.Path(temp)
+              for platform, opts in specs.items():
+                  match = candidate(opts)
+                  if match is None:
+                      summary.append((platform, 'NOT PUBLISHED: no passing, non-expired artifact for EXACT Mac source SHA'))
+                      continue
+                  run_id, artifacts, workflow = match
+                  print(f'AQC_FOUND {platform}: {workflow} run {run_id}', flush=True)
+                  try:
+                      files = [fetch(run_id, a, root) for a in artifacts]
+                      if platform == 'Windows x64':
+                          setup, model = files
+                          # The EXE is hardcoded to download AQC-Model.zip from v1.0.0-rc.2.
+                          # Ensure the original verified model really exists there FIRST.
+                          try:
+                              release(model_tag)
+                          except RuntimeError:
+                              # If no release exists, create a separate support prerelease at the SAME source SHA.
+                              gh('release', 'create', model_tag, '-R', repo, '--target', source,
+                                 '--title', 'AudiobookQC RC2 — Windows model support files',
+                                 '--notes', 'Files required by the pinned offline Windows installer.',
+                                 '--prerelease', capture=False)
+                          model_result = upload_or_check(model_tag, model)
+                          setup_result = upload_or_check(tag, setup)
+                          upload_or_check(tag, model)
+                          result = f'{setup_result}; model at pinned tag: {model_result}'
+                      else:
+                          result = ', '.join(upload_or_check(tag, f) for f in files)
+                      summary.append((platform, f'OK: {result}; source {source[:10]}'))
+                  except Exception as exc:
+                      summary.append((platform, f'NOT PUBLISHED: {exc}'))
+
+          if all(status.startswith('OK:') for _, status in summary):
+              body = target.get('body', '')
+              marker = '\n\n---\n\n### Additional tested platform packages\n'
+              body = body.split(marker)[0] + marker + (
+                  'Windows x64 (`AQC-Setup.exe`, with the pinned model archive), '
+                  'experimental Mac Intel (`AudiobookQC-Mac-Intel-PREVIEW.dmg`), '
+                  'Linux x64 and Linux ARM64 (`.tar.gz` archives). '
+                  'Windows ARM64 uses x64 emulation only; native support is not tested. '
+                  'End-user functionality must still be tested on physical computers.\n'
+              )
+              with tempfile.NamedTemporaryFile('w', suffix='.md', encoding='utf-8', delete=False) as notes:
+                  notes.write(body)
+                  notes_path = notes.name
+              try:
+                  gh('release', 'edit', tag, '-R', repo, '--title',
+                     'AudiobookQC RC2 — Windows, macOS and Linux previews',
+                     '--notes-file', notes_path, capture=False)
+              finally:
+                  pathlib.Path(notes_path).unlink(missing_ok=True)
+
+          print('\n=== AudiobookQC publication summary ===', flush=True)
+          summary_lines = [f'- **{name}**: {status}' for name, status in summary]
+          for line in summary_lines:
+              print(line, flush=True)
+          step_summary = os.environ.get('GITHUB_STEP_SUMMARY')
+          if step_summary:
+              with open(step_summary, 'a', encoding='utf-8') as f:
+                  f.write('## AudiobookQC — additional platforms\n\n')
+                  f.write(f'Existing Mac M4 release: https://github.com/{repo}/releases/tag/{tag}\n\n')
+                  f.write('\n'.join(summary_lines)+'\n\n')
+                  f.write('No rebuilds performed. All copied assets must match Mac M4 source commit. Windows ARM64 is x64 emulation only.\n')
+          if any(not status.startswith('OK:') for _, status in summary):
+              raise SystemExit('INCOMPLETE: see the platform-by-platform summary above. Already verified assets remain published.')
+          PY
