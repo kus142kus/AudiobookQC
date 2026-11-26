@@ -1,0 +1,162 @@
+# Publish an already-tested Mac Apple Silicon DMG from build.yml run #50.
+# This does not rebuild Windows, Linux, or Mac and never publishes an unverified DMG.
+name: Publish verified Mac M4 now (no rebuild)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: aqc-publish-mac-m4-only
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish tested Mac M4 DMG from build #50
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: v1.0.0-rc.2-m4.1
+      SOURCE_PREFIX: a6c4379
+      BUILD_NUMBER: '50'
+    steps:
+      - name: Find the exact build and verify its Mac job succeeded
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GH_REPO/actions/workflows/build.yml/runs?per_page=100" > "$RUNNER_TEMP/aqc-runs.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          runs=json.loads((Path(os.environ['RUNNER_TEMP'])/'aqc-runs.json').read_text())['workflow_runs']
+          number=int(os.environ['BUILD_NUMBER'])
+          matches=[r for r in runs if r['run_number']==number]
+          if len(matches)!=1:
+              raise RuntimeError(f'Build #{number} was not uniquely found; refusing to guess.')
+          run=matches[0]
+          sha=run['head_sha']
+          if not sha.startswith(os.environ['SOURCE_PREFIX']):
+              raise RuntimeError(f'Build source SHA {sha} differs from expected {os.environ["SOURCE_PREFIX"]}.')
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f:
+              f.write(f'run_id={run["id"]}\nsource_sha={sha}\n')
+          print(f'AQC_SOURCE_OK build={number} run_id={run["id"]} source={sha}',flush=True)
+          PY
+          RUN_ID=$(sed -n 's/^run_id=//p' "$GITHUB_OUTPUT")
+          gh api "repos/$GH_REPO/actions/runs/$RUN_ID/jobs?per_page=100" > "$RUNNER_TEMP/aqc-jobs.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          jobs=json.loads((Path(os.environ['RUNNER_TEMP'])/'aqc-jobs.json').read_text())['jobs']
+          good=[j for j in jobs if j['name']=='Offline Mac-Apple-Silicon' and j['conclusion']=='success']
+          if len(good)!=1:
+              raise RuntimeError('Mac Apple Silicon job did not pass. Publication blocked.')
+          print('AQC_MAC_JOB_SUCCESS',flush=True)
+          PY
+          gh api "repos/$GH_REPO/actions/runs/$RUN_ID/artifacts?per_page=100" > "$RUNNER_TEMP/aqc-artifacts.json"
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          arts=json.loads((Path(os.environ['RUNNER_TEMP'])/'aqc-artifacts.json').read_text())['artifacts']
+          matches=[a for a in arts if a['name']=='AQC-Mac-M4' and not a['expired']]
+          if len(matches)!=1:
+              raise RuntimeError('Exactly one non-expired AQC-Mac-M4 artifact is required.')
+          print('AQC_MAC_ARTIFACT_FOUND',matches[0]['id'],flush=True)
+          PY
+
+      - name: Download the existing Mac artifact directly inside GitHub
+        shell: bash
+        env:
+          RUN_ID: ${{ steps.source.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/mac"
+          gh run download "$RUN_ID" --repo "$GH_REPO" --name AQC-Mac-M4 --dir "$RUNNER_TEMP/mac"
+
+      - name: Check DMG size and ORIGINAL build SHA-256 (never regenerate)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, os, re
+          from pathlib import Path
+          folder=Path(os.environ['RUNNER_TEMP'])/'mac'
+          dmg=folder/'AudiobookQC-Mac.dmg'
+          sidecar=folder/'AudiobookQC-Mac.dmg.sha256'
+          if not dmg.is_file() or not sidecar.is_file():
+              raise RuntimeError('Mac DMG or the original SHA256 file is missing.')
+          size=dmg.stat().st_size
+          if not 0<size<2*1024**3:
+              raise RuntimeError(f'DMG size {size} bytes outside GitHub Releases per-file limit.')
+          expected=sidecar.read_text(encoding='ascii').strip()
+          if not re.fullmatch('[a-f0-9]{64}  AudiobookQC-Mac\\.dmg',expected):
+              raise RuntimeError('Unexpected original checksum file format.')
+          h=hashlib.sha256()
+          with dmg.open('rb') as f:
+              for block in iter(lambda:f.read(8*1024*1024),b''):
+                  h.update(block)
+          actual=f'{h.hexdigest()}  {dmg.name}'
+          if actual!=expected:
+              raise RuntimeError('SHA256 MISMATCH. Publication blocked.')
+          print(f'AQC_MAC_VERIFIED {size} bytes sha256={h.hexdigest()}',flush=True)
+          PY
+
+      - name: Publish one separate prerelease for dad's Mac M4
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/aqc-mac-notes.md" <<'NOTES'
+          ## AudiobookQC — Mac Apple Silicon test build
+
+          - For Apple Silicon (M1/M2/M3/M4/M5), including Mac M4.
+          - Built from verified source build #50. Includes the Word export fix.
+          - This is a **test version**, not yet fully verified on the end user's Mac.
+          - Download **AudiobookQC-Mac.dmg** below, open it, and copy AudiobookQC into Applications, replacing the old app.
+          - Do **not** delete existing AudiobookQC projects or audio/text files.
+          - First, try a short audiobook clip and verify a real Word report is saved.
+          - Files remain local during audiobook checking. Initial download requires the internet.
+          - This Mac build may be unsigned/not notarized; use only if you trust this repository.
+          NOTES
+          if gh release view "$RELEASE_TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            draft=$(gh release view "$RELEASE_TAG" --repo "$GH_REPO" --json isDraft --jq '.isDraft')
+            if [ "$draft" != true ]; then
+              echo 'Release tag already published. Refusing to overwrite an existing public release.' >&2
+              exit 1
+            fi
+            tag_sha=$(gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" --jq '.object.sha')
+            if [ "$tag_sha" != "$SOURCE_SHA" ]; then
+              echo 'Existing draft tag points at another code version. Publication blocked.' >&2
+              exit 1
+            fi
+          else
+            gh release create "$RELEASE_TAG" --repo "$GH_REPO" \
+              --target "$SOURCE_SHA" --draft --prerelease \
+              --title 'AudiobookQC 1.0 RC2 — Mac M4 tested build' \
+              --notes-file "$RUNNER_TEMP/aqc-mac-notes.md"
+          fi
+          gh release upload "$RELEASE_TAG" \
+            "$RUNNER_TEMP/mac/AudiobookQC-Mac.dmg" \
+            "$RUNNER_TEMP/mac/AudiobookQC-Mac.dmg.sha256" \
+            --repo "$GH_REPO" --clobber
+          # Do not go public before both complete assets are present.
+          gh release view "$RELEASE_TAG" --repo "$GH_REPO" --json assets > "$RUNNER_TEMP/aqc-release-assets.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          assets=json.loads((Path(os.environ['RUNNER_TEMP'])/'aqc-release-assets.json').read_text())['assets']
+          names={a['name'] for a in assets}
+          required={'AudiobookQC-Mac.dmg','AudiobookQC-Mac.dmg.sha256'}
+          if not required<=names:
+              raise RuntimeError(f'Release missing assets: {required-names}')
+          print('AQC_RELEASE_ASSETS_OK',flush=True)
+          PY
+          gh release edit "$RELEASE_TAG" --repo "$GH_REPO" --draft=false --prerelease
+          echo 'AQC_MAC_RELEASE_PUBLISHED'
+          echo "https://github.com/$GH_REPO/releases/tag/$RELEASE_TAG"
