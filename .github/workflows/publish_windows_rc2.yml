@@ -52,12 +52,20 @@ jobs:
       - name: Native Windows x64 runner check
         shell: bash
         run: python scripts/check_ci_platform.py Windows-x64
-      - name: Preflight original application and tag contract
+      - name: Fast release-contract check BEFORE installing dependencies
         shell: bash
         run: |
           set -euo pipefail
           python scripts/verify_release_contract.py
-          python scripts/preflight_source.py
+          python -m compileall -q run.py src scripts
+          python - <<'PY_CHECK'
+          from pathlib import Path
+          build = Path('requirements-build.txt').read_text(encoding='utf-8')
+          runtime = Path('requirements.txt').read_text(encoding='utf-8')
+          assert '-r requirements.txt' in build, 'Build requirements must install runtime requirements'
+          assert 'python-docx' in runtime.lower(), 'DOCX exporter must be installed before preflight'
+          print('AQC_STATIC_PREFLIGHT_OK', flush=True)
+          PY_CHECK
       - name: Install CPU-only PyTorch and exact app dependencies
         shell: bash
         run: |
@@ -75,6 +83,18 @@ jobs:
           assert hasattr(pkg_resources, 'NullProvider')
           print('AQC_PINNED_DEPENDENCIES_OK', flush=True)
           PY
+      - name: Preflight application imports AFTER installing dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY_IMPORT'
+          import docx
+          from docx import Document
+          document = Document()
+          document.add_paragraph('AudiobookQC Word dependency preflight')
+          print('AQC_PYTHON_DOCX_INSTALLED_OK', flush=True)
+          PY_IMPORT
+          python scripts/preflight_source.py
       - name: Run source tests and real native GUI preflight
         shell: bash
         env:
