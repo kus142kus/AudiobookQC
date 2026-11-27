@@ -1,50 +1,181 @@
 <!doctype html>
-<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="AudiobookQC — бесплатная локальная проверка озвучки аудиокниг. Скачать для Mac, Windows и Linux."><title>AudiobookQC — скачать для Mac, Windows и Linux</title>
-<style>
-:root{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#142c45;background:#f5f7fb;font-size:16px;line-height:1.55}*{box-sizing:border-box}body{margin:0}a{color:inherit}.wrap{max-width:1020px;margin:auto;padding:0 24px}header{background:#fff;border-bottom:1px solid #e4ebf2}nav{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 0}.logo{font-weight:850;font-size:21px;text-decoration:none;letter-spacing:-.7px}.logo span{color:#1975ca}.navlink{color:#51708c;font-size:14px;text-decoration:none}.navlink:hover{text-decoration:underline}main{padding:56px 0 75px}.eyebrow{color:#1175bd;font-weight:800;letter-spacing:.1em;font-size:12px;text-transform:uppercase}h1{font-size:clamp(35px,5.5vw,57px);line-height:1.1;letter-spacing:-.045em;max-width:750px;margin:12px 0 16px}p.lead{font-size:19px;color:#4e647b;max-width:720px;margin:0 0 19px}.tiny{font-size:13px;color:#637a8e}.status{display:inline-flex;gap:7px;align-items:center;padding:7px 12px;border-radius:99px;background:#eaf4ff;color:#275782;font-size:12px;font-weight:700;margin-bottom:28px}.status:before{content:'';width:8px;height:8px;border-radius:50%;background:#4d91c4}.cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:18px 0 30px}.card{background:white;border:1px solid #dfE8f0;border-radius:18px;padding:26px;box-shadow:0 8px 25px rgba(36,75,107,.045);display:flex;flex-direction:column;min-height:250px}.card h2{font-size:24px;line-height:1.25;margin:9px 0}.card p{color:#5e7287;margin:0 0 21px}.card .spacer{flex:1}.card .os{font-weight:700;color:#1680cb;font-size:13px}.button{display:inline-flex;align-items:center;justify-content:center;text-decoration:none;border-radius:10px;background:#1575be;color:white;font-weight:750;padding:13px 18px;min-height:48px;text-align:center;transition:background .15s}.button:hover{background:#0e5c98}.button.disabled{background:#e6ecf2;color:#60768a;pointer-events:none}.sub{font-size:12px;color:#70869a;margin-top:10px}.section{margin-top:48px}.section h2{font-size:27px;letter-spacing:-.03em;margin:0 0 14px}.other{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.compact{min-height:192px;padding:20px}.compact h3{font-size:18px;margin:7px 0}.compact p{font-size:14px;margin:0 0 17px}.compact .button{font-size:13px;min-height:42px;padding:9px}.how{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}.how article{padding:22px;border-radius:14px;background:#eaf1f7}.how strong{font-size:16px}.how p{color:#526c82;margin:8px 0 0}.num{background:#d5e5f5;color:#095c9b;width:31px;height:31px;border-radius:50%;display:grid;place-items:center;font-weight:800;margin-bottom:12px}.notice{background:#fff;border:1px solid #e2e9f0;border-left:4px solid #3c8ac7;padding:17px 20px;border-radius:10px;color:#4d6478;margin-top:26px;font-size:14px}.otherlink{font-size:13px;color:#2774aa;text-decoration:none}footer{border-top:1px solid #dfE8f0;padding:24px 0;color:#60788d;font-size:14px;background:#fff}footer .wrap{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}footer a{color:#246ba7;text-decoration:none}a:focus-visible{outline:3px solid #f0ac4d;outline-offset:3px}@media(max-width:760px){main{padding:36px 0 55px}.cards,.other,.how{grid-template-columns:1fr}.card{min-height:auto}.wrap{padding:0 17px}.navlink{font-size:12px}h1{font-size:38px}}
-</style></head>
-<body><header><div class="wrap"><nav><a class="logo" href="./">Audiobook<span>QC</span></a><a class="navlink" href="https://github.com/kus142kus/AudiobookQC">Исходный код на GitHub ↗</a></nav></div></header>
-<main class="wrap">
-<div class="eyebrow">Локальная проверка аудиокниг</div>
-<h1>Находи оговорки в озвучке. Не переслушивай всё заново.</h1>
-<p class="lead">AudiobookQC сравнивает запись с текстом книги и создаёт Word-отчёт с предполагаемыми ошибками и таймкодами.</p>
-<div class="status" id="releaseStatus">Загружаем сведения о доступной версии…</div>
-<section aria-label="Скачать приложение"><div class="cards">
-<article class="card"><span class="os"> macOS · Apple Silicon</span><h2>Скачать для Mac</h2><p>Для Mac с процессором M1, M2, M3, M4 и новее. Модели включены в приложение.</p><div class="spacer"></div><a class="button disabled" id="mac" href="https://github.com/kus142kus/AudiobookQC/releases" aria-disabled="true">Проверяем наличие файла…</a><div class="sub" id="macInfo">Формат DMG</div></article>
-<article class="card"><span class="os">⊞ Windows · x64</span><h2>Скачать для Windows</h2><p>Для Windows 10/11 на компьютерах с Intel или AMD. Для первой установки нужен интернет.</p><div class="spacer"></div><a class="button disabled" id="windows" href="https://github.com/kus142kus/AudiobookQC/releases" aria-disabled="true">Проверяем наличие файла…</a><div class="sub" id="windowsInfo">Формат EXE</div></article>
-</div></section>
-<section class="section" aria-labelledby="otherTitle"><h2 id="otherTitle">Другие системы <small style="font-size:13px;color:#6b7c8c;font-weight:500">— экспериментальные версии</small></h2><div class="other">
-<article class="card compact"><span class="os"> macOS · Intel</span><h3>Mac Intel</h3><p>Только для Mac со старым процессором Intel.</p><div class="spacer"></div><a class="button disabled" href="https://github.com/kus142kus/AudiobookQC/releases" id="macIntel" aria-disabled="true">Проверяем…</a></article>
-<article class="card compact"><span class="os">🐧 Linux · x64</span><h3>Linux x64</h3><p>Тестовый архив, не установщик.</p><div class="spacer"></div><a class="button disabled" href="https://github.com/kus142kus/AudiobookQC/releases" id="linux" aria-disabled="true">Проверяем…</a></article>
-<article class="card compact"><span class="os">🐧 Linux · ARM64</span><h3>Linux ARM64</h3><p>Тестовый архив для ARM64.</p><div class="spacer"></div><a class="button disabled" href="https://github.com/kus142kus/AudiobookQC/releases" id="linuxArm" aria-disabled="true">Проверяем…</a></article>
-</div><p class="tiny">Windows ARM64: отдельная нативная сборка ещё не подтверждена. Пакеты Linux могут потребовать системные библиотеки.</p></section>
-<section class="section"><h2>Как пользоваться</h2><div class="how"><article><div class="num">1</div><strong>Выбери два файла</strong><p>Аудиозапись книги и соответствующий текст в формате DOCX или TXT.</p></article><article><div class="num">2</div><strong>Запусти проверку</strong><p>Программа распознаёт речь, сравнивает её с текстом и перепроверяет подозрительные места.</p></article><article><div class="num">3</div><strong>Получай Word-отчёт</strong><p>Прослушай замечания и исправь запись по таймкодам.</p></article></div></section>
-<div class="notice"><strong>Важно:</strong> это тестовая версия, результаты нужно перепроверять на слух. Аудиозапись и рукопись анализируются локально, без отправки в облако. Для первого теста возьми 5–10 минут записи. Не скачивай пункт «Source code» вместо установщика.</div>
-<section class="section"><h2>Помощь и вопросы</h2><p>Не получается установить? <a class="otherlink" href="https://github.com/kus142kus/AudiobookQC/issues">Сообщить о проблеме ↗</a> · <a class="otherlink" href="https://github.com/kus142kus/AudiobookQC/blob/main/docs/Установка-в-общем-доступе.md">Инструкция по установке ↗</a> · <a class="otherlink" href="https://github.com/kus142kus/AudiobookQC/releases">Все выпуски ↗</a></p></section>
-</main>
-<footer><div class="wrap"><span>© AudiobookQC · Бесплатный проект</span><span><a href="https://github.com/kus142kus/AudiobookQC">GitHub</a> · <a href="https://github.com/kus142kus/AudiobookQC/blob/main/THIRD_PARTY_NOTICES.md">Лицензии</a> · <a href="https://github.com/kus142kus/AudiobookQC/blob/main/README.en.md">English</a></span></div></footer>
-<script>
-(()=>{'use strict';
-const repo='kus142kus/AudiobookQC', releases='https://github.com/'+repo+'/releases';
-const wanted={mac:'AudiobookQC-Mac.dmg',windows:'AQC-Setup.exe',macIntel:'AudiobookQC-Mac-Intel-PREVIEW.dmg',linux:'AudiobookQC-Linux-x64-PREVIEW.tar.gz',linuxArm:'AudiobookQC-Linux-ARM64-PREVIEW.tar.gz'};
-const labels={mac:'Скачать DMG для Mac',windows:'Скачать EXE для Windows',macIntel:'Скачать Mac Intel',linux:'Скачать Linux x64',linuxArm:'Скачать Linux ARM64'};
-const fallback=()=>{document.getElementById('releaseStatus').textContent='Не удалось проверить файлы автоматически. Посмотри опубликованные выпуски.';
-Object.keys(wanted).forEach(id=>{let el=document.getElementById(id);el.textContent='Посмотреть выпуски';el.classList.remove('disabled');el.removeAttribute('aria-disabled');el.href=releases;});};
-const validUrl=(uri,tag)=>{try{let u=new URL(uri);return u.protocol==='https:'&&u.hostname==='github.com'&&u.pathname.startsWith('/'+repo+'/releases/download/'+encodeURIComponent(tag)+'/') }catch(e){return false}};
-const fmt=(size)=> size>=1024**3?(size/1024**3).toFixed(2)+' ГиБ':Math.round(size/1024**2)+' МБ';
-fetch('https://api.github.com/repos/'+repo+'/releases?per_page=30',{headers:{Accept:'application/vnd.github+json'}})
-.then(r=>{if(!r.ok)throw Error('GitHub API '+r.status);return r.json()})
-.then(list=>{if(!Array.isArray(list))throw Error('Unexpected API response');
-const eligible=list.filter(r=>!r.draft && Array.isArray(r.assets) && r.tag_name && r.assets.some(a=>a.name===wanted.mac) && r.assets.some(a=>a.name===wanted.windows));
-if(!eligible.length){fallback();return;}
-// Never promote an old v0.2 release even if it contains similarly named files.
-const newer=eligible.filter(r=>/^v1\.|^v[2-9]\d*\./.test(r.tag_name));
-const release=(newer.length?newer:[])[0];if(!release){fallback();return;}
-const assetByName=new Map(release.assets.map(a=>[a.name,a]));
-document.getElementById('releaseStatus').textContent='Доступная версия: '+release.tag_name+(release.prerelease?' · тестовая':'');
-Object.entries(wanted).forEach(([id,name])=>{const el=document.getElementById(id),a=assetByName.get(name);if(a&&a.size>0&&validUrl(a.browser_download_url,release.tag_name)){
-el.href=a.browser_download_url;el.textContent=labels[id];el.classList.remove('disabled');el.removeAttribute('aria-disabled');el.setAttribute('download','');if(id==='mac'||id==='windows')document.getElementById(id+'Info').textContent=name+' · '+fmt(a.size);
-}else{el.textContent='Пока недоступно';el.classList.add('disabled');el.setAttribute('aria-disabled','true');el.href=releases;}});
-}).catch(fallback);
-})();
-</script></body></html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101f35">
+  <meta name="description" content="AudiobookQC — бесплатная локальная проверка озвучки аудиокниг. Скачать для Mac, Windows и Linux. Word-отчёты с таймкодами.">
+  <title>AudiobookQC — скачать программу</title>
+  <style>
+    :root{font:16px/1.53 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;color:#14243a;background:#f4f7fb}
+    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0}a{color:inherit}
+    .wrap{width:min(1070px,calc(100% - 44px));margin:auto}
+    .header{background:#101f35;color:#f8fbff}
+    nav{display:flex;justify-content:space-between;align-items:center;padding:21px 0;gap:14px}
+    .logo{display:flex;gap:11px;align-items:center;font-size:20px;font-weight:840;letter-spacing:-.7px;text-decoration:none}
+    .logo-icon{display:inline-grid;place-items:center;width:34px;height:34px;border-radius:10px;background:#1f74a9;font-size:20px}
+    .nav-links{display:flex;gap:24px;align-items:center;font-size:13px;color:#c5d5e4}
+    .nav-links a{text-decoration:none}.nav-links a:hover{text-decoration:underline}
+    .hero{padding:58px 0 73px;background:radial-gradient(ellipse at 85% 13%,#21476a 0,transparent 46%),#101f35;color:white}
+    .eyebrow{display:inline-flex;align-items:center;gap:8px;color:#aad5ed;font-size:12px;font-weight:750;letter-spacing:.095em;text-transform:uppercase}
+    .eyebrow:before{content:"";width:7px;height:7px;border-radius:50%;background:#71d4b7}
+    h1{font-size:clamp(34px,5.4vw,60px);letter-spacing:-.052em;line-height:1.13;max-width:740px;margin:17px 0}
+    .intro{color:#c6d6e5;font-size:18px;max-width:650px;margin:0 0 22px}
+    .chips{display:flex;flex-wrap:wrap;gap:10px}
+    .chip{border:1px solid #426078;border-radius:100px;padding:7px 12px;color:#d4e4ee;font-size:12px}
+    .sheet{position:relative;margin:28px auto 0}
+    .sheet-title{display:flex;justify-content:space-between;gap:12px;align-items:end;margin:0 2px 18px}
+    .sheet-title h2,.section h2{font-size:26px;letter-spacing:-.032em;line-height:1.2;margin:0}
+    .release{font-size:12px;font-weight:680;background:#e4edf6;color:#52687d;padding:7px 11px;border-radius:99px;max-width:100%}
+    .downloads{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+    .download-card{background:white;border:1px solid #dfe7ef;border-radius:20px;box-shadow:0 12px 30px #15243b0b;padding:26px;min-height:274px;display:flex;flex-direction:column}
+    .download-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+    .platform{display:flex;align-items:center;gap:10px;font-weight:780;font-size:17px}
+    .os-icon{width:37px;height:37px;border-radius:10px;background:#edf3f9;display:grid;place-items:center;font-size:20px}
+    .tag{font-size:11px;font-weight:700;color:#55718a;background:#edf4fa;padding:5px 8px;border-radius:100px;white-space:nowrap}
+    .download-card h3{margin:22px 0 6px;font-size:22px;letter-spacing:-.025em}
+    .download-card p{color:#617489;margin:0 0 20px;font-size:14px}
+    .grow{flex:1}
+    .btn{display:flex;align-items:center;justify-content:center;gap:9px;min-height:49px;border:0;border-radius:11px;background:#146fae;color:white;font:inherit;font-weight:780;text-decoration:none;cursor:pointer;padding:12px 15px;text-align:center}
+    .btn:hover{background:#075789}.btn:focus-visible,.small-btn:focus-visible,a:focus-visible,summary:focus-visible{outline:3px solid #f5b64e;outline-offset:3px}
+    .btn.secondary{background:#ebf2f8;color:#175884}.btn.secondary:hover{background:#dcebf6}
+    .btn.disabled{pointer-events:none;background:#eef2f5;color:#788898;cursor:default}
+    .hint{font-size:12px;color:#657b90;margin-top:12px;min-height:18px}
+    .hint.error{color:#936d13}
+    .section{margin-top:54px}.section-lead{color:#65768b;font-size:14px;margin:9px 0 19px}
+    .alternatives{background:white;border:1px solid #dfe7ef;border-radius:17px;overflow:hidden}
+    .alt{display:flex;align-items:center;gap:16px;justify-content:space-between;padding:18px 22px}
+    .alt+.alt{border-top:1px solid #e8edf2}
+    .alt-head{display:flex;align-items:center;gap:13px;min-width:0}
+    .alt-icon{width:39px;height:39px;display:grid;place-items:center;background:#f1f5f9;border-radius:11px;flex-shrink:0;font-size:20px}
+    .alt strong{display:block;font-size:15px}.alt span.note{display:block;font-size:12px;color:#718397;line-height:1.4;margin-top:3px}
+    .small-btn{padding:10px 15px;border:1px solid #c9dce9;color:#12639d;text-decoration:none;border-radius:9px;font-size:13px;font-weight:750;white-space:nowrap;display:inline-block}
+    .small-btn:hover{background:#eef6fa}.small-btn.disabled{pointer-events:none;color:#8594a2;background:#f1f4f7;border:1px solid #edf0f3}
+    .linux-guide{display:none;background:#f0f5f9;padding:16px 21px;color:#536879;font-size:13px;border-top:1px solid #e0e9f1}
+    .linux-guide.show{display:block}.linux-guide code{display:inline-block;padding:6px 9px;border-radius:7px;background:#e4edf5;color:#264763;margin:8px 0 2px;word-break:break-all}
+    .steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+    .step{border:1px solid #dee8ef;background:#fff;border-radius:14px;padding:23px}
+    .number{width:29px;height:29px;display:grid;place-items:center;border-radius:50%;background:#ddebfa;color:#1568a5;font-size:13px;font-weight:850;margin-bottom:13px}
+    .step strong{font-size:15px}.step p{font-size:13px;color:#64788b;margin:8px 0 0}
+    .faq{background:#fff;border:1px solid #dfe7ef;border-radius:14px;padding:0 20px}
+    details{padding:15px 0}details+details{border-top:1px solid #e8edf2}
+    summary{cursor:pointer;font-weight:720;font-size:14px}details p{font-size:13px;color:#5a6f83;margin:9px 0 0}
+    footer{margin-top:66px;background:#101f35;color:#b5c5d4;padding:30px 0;font-size:13px}
+    footer .wrap{display:flex;justify-content:space-between;gap:18px;flex-wrap:wrap}
+    footer a{color:#c7e4f6}
+    .warning{font-size:12px;color:#60758a;margin:15px 0 0}
+    @media(max-width:740px){.hero{padding:39px 0 70px}.downloads,.steps{grid-template-columns:1fr}.download-card{min-height:236px}.sheet-title{align-items:flex-start;flex-direction:column}.nav-links{gap:12px}.nav-links a:nth-child(2){display:none}.alt{padding:15px;align-items:flex-start;gap:8px}.alt .alt-head{align-items:flex-start}.alt .small-btn{font-size:12px;padding:9px}.wrap{width:min(1070px,calc(100% - 28px))}.hero h1{font-size:36px}}
+  </style>
+</head>
+<body>
+  <header class="header"><div class="wrap"><nav>
+    <a class="logo" href="./"><span class="logo-icon" aria-hidden="true">◇</span> AudiobookQC</a>
+    <div class="nav-links"><a href="#downloads">Скачать</a><a href="#how">Как работает</a><a href="#help">Помощь</a></div>
+  </nav></div></header>
+  <div class="hero"><div class="wrap">
+    <div class="eyebrow">Проверка аудиокниг · бесплатно</div>
+    <h1>Проверяй озвучку книги без многочасового переслушивания</h1>
+    <p class="intro">Загрузи запись и оригинальный текст. Программа найдёт возможные оговорки, пропуски и повторы и подготовит Word-отчёт с таймкодами.</p>
+    <div class="chips"><span class="chip">Работает на компьютере</span><span class="chip">Без облачной отправки книг</span><span class="chip">Word-отчёты</span></div>
+  </div></div>
+  <main class="wrap">
+    <section class="sheet" id="downloads" aria-labelledby="downloads-title">
+      <div class="sheet-title"><h2 id="downloads-title">Скачать AudiobookQC</h2><span class="release" id="release-status" role="status">RC2 · тестовая версия</span></div>
+      <div class="downloads">
+        <article class="download-card"><div class="download-top"><div class="platform"><span class="os-icon" aria-hidden="true">⌘</span>Mac</div><span class="tag">Apple Silicon</span></div>
+          <h3>Для Mac с M1–M4</h3><p>Для современных Mac, включая M4. Один DMG с моделями для локальной работы.</p><div class="grow"></div>
+          <a class="btn" id="mac" href="https://github.com/kus142kus/AudiobookQC/releases/download/v1.0.0-rc.2-m4.1/AudiobookQC-Mac.dmg">↓ Скачать для Mac</a>
+          <div class="hint" id="mac-hint">Открой DMG и перенеси AudiobookQC в «Программы».</div>
+        </article>
+        <article class="download-card"><div class="download-top"><div class="platform"><span class="os-icon" aria-hidden="true">⊞</span>Windows</div><span class="tag">10 / 11 · x64</span></div>
+          <h3>Для Windows</h3><p>Один установщик EXE для компьютеров с Intel или AMD. При первой установке потребуется интернет.</p><div class="grow"></div>
+          <a class="btn disabled" id="windows" aria-disabled="true">Пока недоступно</a>
+          <div class="hint" id="windows-hint">Не скачивай архив модели отдельно.</div>
+        </article>
+      </div>
+      <p class="warning">Это предварительная версия. Возможны пропущенные ошибки и ложные замечания. Первую проверку рекомендуется проводить на записи 5–10 минут.</p>
+    </section>
+    <section class="section" aria-labelledby="others-title">
+      <h2 id="others-title">Другие операционные системы</h2><p class="section-lead">Экспериментальные версии. Если не знаешь архитектуру своего компьютера, сначала посмотри её в настройках ОС.</p>
+      <div class="alternatives">
+        <div class="alt"><div class="alt-head"><div class="alt-icon" aria-hidden="true">⌘</div><div><strong>Mac Intel</strong><span class="note">Для старых Mac на процессоре Intel · DMG</span></div></div><a id="intel" class="small-btn" href="https://github.com/kus142kus/AudiobookQC/releases/download/v1.0.0-rc.2-m4.1/AudiobookQC-Mac-Intel-PREVIEW.dmg">Скачать</a></div>
+        <div class="alt"><div class="alt-head"><div class="alt-icon" aria-hidden="true">🐧</div><div><strong>Linux x64</strong><span class="note">Для компьютеров Intel / AMD · скрипт установки</span></div></div><a id="linux-x64" class="small-btn" href="https://github.com/kus142kus/AudiobookQC/releases/download/v1.0.0-rc.2-m4.1/AudiobookQC-Linux-x64-PREVIEW-INSTALL.sh">Скачать</a></div>
+        <div class="linux-guide" id="guide-x64">Скачай файл установки, затем в терминале Linux выполни:<br><code>bash ~/Downloads/AudiobookQC-Linux-x64-PREVIEW-INSTALL.sh</code><br>Файл сам скачает части приложения и проверит их контрольные суммы.</div>
+        <div class="alt"><div class="alt-head"><div class="alt-icon" aria-hidden="true">🐧</div><div><strong>Linux ARM64</strong><span class="note">Для компьютеров на ARM64 · скрипт установки</span></div></div><a id="linux-arm64" class="small-btn" href="https://github.com/kus142kus/AudiobookQC/releases/download/v1.0.0-rc.2-m4.1/AudiobookQC-Linux-ARM64-PREVIEW-INSTALL.sh">Скачать</a></div>
+        <div class="linux-guide" id="guide-arm64">Скачай файл установки, затем в терминале Linux выполни:<br><code>bash ~/Downloads/AudiobookQC-Linux-ARM64-PREVIEW-INSTALL.sh</code><br>Файл сам скачает части приложения и проверит их контрольные суммы.</div>
+      </div>
+      <p class="warning">Для Windows ARM64 отдельной нативной версии нет. Возможен запуск x64-приложения через эмуляцию Windows 11 ARM64; полная совместимость пока не подтверждена.</p>
+    </section>
+    <section class="section" id="how"><h2>Как работает программа</h2><p class="section-lead">Три шага без облачных сервисов и платных подписок.</p>
+      <div class="steps">
+        <article class="step"><div class="number">1</div><strong>Выбери запись и текст</strong><p>Аудиофайл MP3, WAV и другие поддерживаемые форматы и соответствующий текст DOCX или TXT.</p></article>
+        <article class="step"><div class="number">2</div><strong>Запусти проверку</strong><p>Две локальные модели распознают речь и сравнивают её с исходной рукописью.</p></article>
+        <article class="step"><div class="number">3</div><strong>Получай Word-отчёт</strong><p>Отчёт подсказывает, что проверить и в какой момент записи. Подозрительные места нужно прослушать.</p></article>
+      </div>
+    </section>
+    <section class="section" id="help"><h2>Вопросы и помощь</h2><div class="faq">
+      <details><summary>Нужен ли интернет для работы?</summary><p>Для установки Windows-модели интернет нужен один раз. После установки проверка выполняется локально. Mac Apple Silicon получает модели вместе с DMG.</p></details>
+      <details><summary>Mac сообщает, что приложение от неизвестного разработчика</summary><p>Проверь, что DMG скачан по этой ссылке. В macOS открой «Системные настройки → Конфиденциальность и безопасность» и найди разрешение на запуск AudiobookQC. Если система предупреждает о вредоносном ПО или повреждении файла, не отключай защиту — сообщи о проблеме.</p></details>
+      <details><summary>Почему у Linux один небольшой файл установки?</summary><p>Полный пакет Linux слишком велик для одного файла GitHub. Скрипт автоматически скачивает проверенные части. Если ты не уверен, как работать в терминале, воспользуйся помощью технического специалиста.</p></details>
+      <details><summary>Как сообщить об ошибке?</summary><p>Открой <a href="https://github.com/kus142kus/AudiobookQC/issues" rel="noopener noreferrer">раздел сообщений об ошибках</a>. Не прикладывай чужие рукописи или записи без разрешения правообладателя.</p></details>
+    </div></section>
+  </main>
+  <footer><div class="wrap"><span>AudiobookQC · бесплатный проект · <span id="footer-version">тестовая версия RC2</span></span><span><a href="https://github.com/kus142kus/AudiobookQC/releases">Все выпуски</a> · <a href="https://github.com/kus142kus/AudiobookQC">Исходный код</a> · <a href="https://github.com/kus142kus/AudiobookQC/blob/main/THIRD_PARTY_NOTICES.md">Лицензии</a></span></div></footer>
+  <script>
+  (()=>{
+    'use strict';
+    const repo='kus142kus/AudiobookQC';
+    // Deliberately pinned to tested release. Old v0.2/v0.9 assets are NEVER selected.
+    const tag='v1.0.0-rc.2-m4.1';
+    const base=`https://github.com/${repo}/releases/download/${tag}/`;
+    const assets={
+      mac:'AudiobookQC-Mac.dmg',
+      windows:'AQC-Setup.exe',
+      intel:'AudiobookQC-Mac-Intel-PREVIEW.dmg',
+      'linux-x64':'AudiobookQC-Linux-x64-PREVIEW-INSTALL.sh',
+      'linux-arm64':'AudiobookQC-Linux-ARM64-PREVIEW-INSTALL.sh'
+    };
+    const texts={mac:'↓ Скачать для Mac',windows:'↓ Скачать для Windows',intel:'Скачать',
+      'linux-x64':'Скачать','linux-arm64':'Скачать'};
+    const $=id=>document.getElementById(id);
+    function update(id, available){
+      const a=$(id);
+      if(!a)return;
+      if(available){a.href=base+encodeURIComponent(assets[id]);a.textContent=texts[id];a.classList.remove('disabled');a.removeAttribute('aria-disabled');}
+      else{a.removeAttribute('href');a.classList.add('disabled');a.setAttribute('aria-disabled','true');a.textContent='Пока недоступно';}
+      if(id==='windows'){$('windows-hint').textContent=available?'Один EXE. Модель загрузится автоматически при установке.':'Установщик готовится. Не скачивай старую версию.';}
+      if(id==='linux-x64')$('guide-x64').classList.toggle('show',available);
+      if(id==='linux-arm64')$('guide-arm64').classList.toggle('show',available);
+    }
+    function validateAsset(a,name){
+      try{const u=new URL(a.browser_download_url);return a.name===name&&a.size>0&&u.protocol==='https:'&&u.hostname==='github.com'&&u.pathname===`/${repo}/releases/download/${tag}/${encodeURIComponent(name)}`;}
+      catch(_){return false;}
+    }
+    async function check(){
+      try{
+        const controller=new AbortController();
+        const timeout=setTimeout(()=>controller.abort(),9000);
+        let response;
+        try{response=await fetch(`https://api.github.com/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`,{
+          headers:{Accept:'application/vnd.github+json'},signal:controller.signal,cache:'no-store'});}
+        finally{clearTimeout(timeout);}
+        if(!response.ok)throw Error(`GitHub API ${response.status}`);
+        const data=await response.json();
+        if(data.draft||data.tag_name!==tag||!Array.isArray(data.assets))throw Error('Release unavailable');
+        const found=new Map(data.assets.map(a=>[a.name,a]));
+        for(const [id,name] of Object.entries(assets))update(id,validateAsset(found.get(name)||{},name));
+        $('release-status').textContent='Версия '+tag+' · тестовая';
+        $('footer-version').textContent='версия '+tag;
+      }catch(err){
+        // Screenshots confirm these public assets exist. Keep those links working
+        // during GitHub API rate limits. NEVER guess Windows availability.
+        for(const id of ['mac','intel','linux-x64','linux-arm64'])update(id,true);
+        update('windows',false);
+        $('release-status').textContent='Версия RC2 · сведения о Windows временно недоступны';
+      }
+    }
+    check();
+  })();
+  </script>
+</body>
+</html>
