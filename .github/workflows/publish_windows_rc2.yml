@@ -1,0 +1,296 @@
+# Windows-only publication for the ALREADY published Mac M4 release.
+# No changes to build.yml or existing Mac/Linux assets.
+# Rebuilds the verified source commit, changing ONLY the Windows model URL
+# inside the generated installer manifest, before Inno Setup compiles it.
+name: Publish Windows x64 into AudiobookQC RC2 (Mac/Linux unchanged)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: aqc-publish-windows-rc2-m4-1
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: v1.0.0-rc.2-m4.1
+  SOURCE_SHA: a6c4379cff77e50516f4698e297aeb5348fdbd0c
+
+jobs:
+  windows:
+    name: Build and verify Windows x64 only
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - name: Checkout exactly the same application source as Mac M4
+        uses: actions/checkout@v4
+        with:
+          ref: a6c4379cff77e50516f4698e297aeb5348fdbd0c
+          persist-credentials: false
+      - name: Verify release tag points to that source and Mac DMG exists
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git fetch --no-tags --depth=1 origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          test "$(git rev-list -n 1 "refs/tags/$RELEASE_TAG")" = "$SOURCE_SHA" || {
+            echo 'Release tag differs from Mac source!'; exit 1;
+          }
+          gh release view "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[].name' > mac-assets.txt
+          grep -Fxq 'AudiobookQC-Mac.dmg' mac-assets.txt
+          grep -Fxq 'AudiobookQC-Mac.dmg.sha256' mac-assets.txt
+          echo 'AQC_MAC_SOURCE_AND_ASSETS_OK'
+      - name: Python 3.11 for Windows build machine only
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Native Windows x64 runner check
+        shell: bash
+        run: python scripts/check_ci_platform.py Windows-x64
+      - name: Preflight original application and tag contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/verify_release_contract.py
+          python scripts/preflight_source.py
+      - name: Install CPU-only PyTorch and exact app dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-build.txt
+          python -m pip install --force-reinstall setuptools==80.9.0
+          python -m pip check
+          python - <<'PY'
+          import torch, torchaudio, transformers, pkg_resources
+          assert torch.__version__.split('+')[0] == '2.8.0'
+          assert torchaudio.__version__.split('+')[0] == '2.8.0'
+          assert transformers.__version__ == '4.57.1'
+          assert hasattr(pkg_resources, 'NullProvider')
+          print('AQC_PINNED_DEPENDENCIES_OK', flush=True)
+          PY
+      - name: Run source tests and real native GUI preflight
+        shell: bash
+        env:
+          QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu --disable-gpu-compositing
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests -v
+          python run.py --smoke-gui
+          python scripts/build_installer.py --self-test
+      - name: Install Inno Setup on CI machine only and run actual installer fixture
+        shell: pwsh
+        run: |
+          choco upgrade innosetup -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup compiler failed to install' }
+          python scripts/build_installer.py --test-inno
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup fixture failed' }
+      - name: Download full offline speech and sound-event models
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/get_offline_model.py
+          python scripts/get_event_model.py
+      - name: Validate bundled model signatures before frozen packaging
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import sys
+          from pathlib import Path
+          sys.path.insert(0,'src')
+          from audiobook_qc.dual_engine import check_model_hash
+          check_model_hash(Path('models/gigaam'))
+          print('AQC_GIGAAM_MODEL_OK',flush=True)
+          PY
+          python - <<'PY'
+          import sys, wave, tempfile
+          from pathlib import Path
+          sys.path.insert(0,'src')
+          from audiobook_qc.events import AudioEventDetector
+          with tempfile.TemporaryDirectory() as td:
+              p=Path(td)/'silence.wav'
+              with wave.open(str(p),'wb') as out:
+                  out.setnchannels(1);out.setsampwidth(2);out.setframerate(16000)
+                  out.writeframes(b'\x00\x00'*16000*3)
+              assert isinstance(AudioEventDetector().inspect(p,0,0,3),list)
+          print('AQC_YAMNET_INFERENCE_OK',flush=True)
+          PY
+      - name: Freeze Windows x64 application with models, Word templates and Qt
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m PyInstaller --noconfirm --clean --onedir --windowed \
+            --name AudiobookQC --paths src \
+            --add-data 'models:models' --add-data 'web:web' \
+            --add-data 'LICENSE:.' --add-data 'THIRD_PARTY_NOTICES.md:.' \
+            --collect-data docx \
+            --hidden-import webview.platforms.qt \
+            --hidden-import PySide6.QtWebEngineWidgets \
+            --hidden-import PySide6.QtWebEngineCore \
+            --hidden-import PySide6.QtWebChannel \
+            --exclude-module pythonnet --exclude-module clr \
+            --exclude-module clr_loader --exclude-module webview.platforms.winforms \
+            --exclude-module PyQt5 --exclude-module PyQt6 --exclude-module PySide2 \
+            --collect-all webview \
+            --collect-all imageio_ffmpeg \
+            --collect-all faster_whisper \
+            --collect-all ctranslate2 \
+            --collect-all av \
+            --collect-all tokenizers \
+            --collect-all sounddevice \
+            --collect-all transformers \
+            --collect-all torchaudio \
+            --collect-all omegaconf \
+            --collect-all hydra \
+            --collect-all sentencepiece \
+            --collect-all onnxruntime \
+            run.py
+      - name: Test ACTUAL Windows EXE, including real Word export
+        shell: bash
+        env:
+          QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu --disable-gpu-compositing
+        run: python scripts/check_bundle.py dist/AudiobookQC/AudiobookQC.exe
+      - name: Prepare installer, pin model URL to SAME release as Mac (no conflict)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/build_installer.py --prepare
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          p=Path('dist/installer-manifest.json')
+          m=json.loads(p.read_text(encoding='utf-8'))
+          old='https://github.com/kus142kus/AudiobookQC/releases/download/v1.0.0-rc.2/AQC-Model.zip'
+          new=f'https://github.com/{os.environ["GITHUB_REPOSITORY"]}/releases/download/{os.environ["RELEASE_TAG"]}/AQC-Model.zip'
+          assert m.get('url') == old, f'Unexpected original pinned model URL: {m.get("url")}'
+          assert len(m.get('model_sha256','')) == 64
+          assert m.get('tag') == 'v1.0.0-rc.2'
+          m['url']=new
+          p.write_text(json.dumps(m,indent=2),encoding='utf-8')
+          print('AQC_MODEL_DOWNLOAD_URL_PINNED_TO_MAC_RELEASE', new, flush=True)
+          PY
+          python scripts/build_installer.py --compile
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          m=json.loads(Path('dist/installer-manifest.json').read_text('utf-8'))
+          iss=Path('dist/AudiobookQC.generated.iss').read_text('utf-8-sig')
+          assert m['url'] in iss and m['model_sha256'] in iss
+          assert 'download extractarchive' in iss
+          assert 'DestName: "AQC-Model.zip"' in iss
+          print('AQC_INNO_VERIFIED_PINNED_URL_AND_HASH',flush=True)
+          PY
+          python scripts/check_release_assets.py --verify dist/AQC-Setup.exe dist/AQC-Model.zip
+      - name: Upload Windows installer and paired model from THIS build
+        uses: actions/upload-artifact@v4
+        with:
+          name: AQC-Windows-RC2-Complete
+          path: |
+            dist/AQC-Setup.exe
+            dist/AQC-Setup.exe.sha256
+            dist/AQC-Model.zip
+            dist/AQC-Model.zip.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish Windows EXE and matching offline model to Mac release
+    needs: windows
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact matching source for asset audit
+        uses: actions/checkout@v4
+        with:
+          ref: a6c4379cff77e50516f4698e297aeb5348fdbd0c
+          persist-credentials: false
+      - name: Download verified Windows assets without rebuilding
+        uses: actions/download-artifact@v4
+        with:
+          name: AQC-Windows-RC2-Complete
+          path: release
+      - name: Verify unchanged original SHA256 files, ZIP contents and EXE
+        run: python scripts/check_release_assets.py --verify release/AQC-Model.zip release/AQC-Setup.exe
+      - name: Check tagged Mac release still points to exact Windows source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          test "$(git rev-list -n 1 "refs/tags/$RELEASE_TAG")" = "$SOURCE_SHA"
+          gh release view "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[].name' | grep -Fxq 'AudiobookQC-Mac.dmg'
+      - name: Safely upload model FIRST, then Windows installer; never overwrite mismatches
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          repo=os.environ['GITHUB_REPOSITORY']
+          tag=os.environ['RELEASE_TAG']
+          folder=pathlib.Path('release')
+          def run(*args, capture=True):
+              p=subprocess.run(['gh',*args],capture_output=capture,text=True)
+              if p.returncode: raise RuntimeError(f'gh failed: {args}: {p.stderr[-700:] if p.stderr else p.returncode}')
+              return p.stdout if capture else ''
+          def get_assets():
+              return {a['name']:a for a in json.loads(run('api',f'repos/{repo}/releases/tags/{tag}'))['assets']}
+          def sha(path):
+              h=hashlib.sha256()
+              with path.open('rb') as f:
+                  for block in iter(lambda:f.read(8*1024*1024),b''): h.update(block)
+              return h.hexdigest()
+          def ensure_asset(name):
+              f=folder/name
+              digest=sha(f)
+              assets=get_assets()
+              side_name=name+'.sha256'
+              if name in assets or side_name in assets:
+                  if name not in assets or side_name not in assets:
+                      raise RuntimeError(f'Partial existing release files for {name}; manual review required')
+                  existing=(assets[name].get('digest') or '').lower()
+                  if existing and existing!=f'sha256:{digest}':
+                      raise RuntimeError(f'Existing {name} has DIFFERENT SHA256: refusing overwrite')
+                  # Also verify the published small sidecar, regardless of API digest support.
+                  p=subprocess.run(['gh','release','download',tag,'-R',repo,'-p',side_name,
+                                   '-D','existing_sidecar'],capture_output=True,text=True)
+                  if p.returncode: raise RuntimeError(f'Cannot verify existing {side_name}: {p.stderr}')
+                  txt=(pathlib.Path('existing_sidecar')/side_name).read_text('ascii').strip()
+                  if txt!=f'{digest}  {name}':
+                      raise RuntimeError(f'Published {side_name} conflicts with rebuilt {name}')
+                  if not existing:
+                      raise RuntimeError(f'No GitHub API digest for existing {name}; refusing unverified reuse')
+                  print('AQC_ALREADY_PUBLISHED_AND_HASH_VERIFIED',name,flush=True)
+                  return
+              run('release','upload',tag,str(f),str(folder/side_name),'-R',repo,capture=False)
+              fresh=get_assets().get(name,{})
+              server_sha=(fresh.get('digest') or '').lower()
+              if server_sha and server_sha != f'sha256:{digest}':
+                  raise RuntimeError(f'GitHub stored different checksum for {name}')
+              print('AQC_RELEASE_UPLOADED',name,flush=True)
+          pathlib.Path('existing_sidecar').mkdir(exist_ok=True)
+          ensure_asset('AQC-Model.zip')
+          ensure_asset('AQC-Setup.exe')
+          print(f'AQC_WINDOWS_COMPLETE https://github.com/{repo}/releases/download/{tag}/AQC-Setup.exe',flush=True)
+          PY
+      - name: Update release title and summary
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release edit "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" \
+            --title 'AudiobookQC RC2 — Windows, macOS and Linux (pre-release)'
+          echo "### Windows x64 published" >> "$GITHUB_STEP_SUMMARY"
+          echo "[Download AQC-Setup.exe](https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/AQC-Setup.exe)" >> "$GITHUB_STEP_SUMMARY"
+          echo 'The EXE downloads its matching pinned model from the SAME release. Mac and Linux assets unchanged.' >> "$GITHUB_STEP_SUMMARY"
